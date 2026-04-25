@@ -1,0 +1,27 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# IDE / Tooling
+.idea/
+.vscode/
+TestResults/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# App runtime state
+state.json
+*.wav
+*.aac
+csharp/stderr*.txt
+csharp/ffmpeg/
+csharp/publish/
+csharp/release/
+csharp/SonosStreaming-Setup-*.exe
+csharp/RoomRelay-Setup-*.exe
+*.log

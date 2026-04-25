@@ -1,0 +1,241 @@
+<Page
+    x:Class="SonosStreaming.App.Views.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:SonosStreaming.App"
+    xmlns:controls="using:SonosStreaming.App.Controls"
+    xmlns:viewmodels="using:SonosStreaming.App.ViewModels"
+    xmlns:state="using:SonosStreaming.Core.State"
+    xmlns:converters="using:SonosStreaming.App.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    x:DataType="viewmodels:MainViewModel">
+
+    <Page.Resources>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+        <converters:StreamingFormatConverter x:Key="StreamingFormatConverter" />
+
+        <Style x:Key="CardBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="12" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="12" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Left panel -->
+        <ScrollViewer Grid.Column="0" VerticalScrollMode="Auto">
+            <StackPanel Spacing="16">
+
+                <InfoBar
+                    Title="Stream Error"
+                    Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                    IsOpen="{x:Bind ViewModel.IsErrorVisible, Mode=OneWay}"
+                    Severity="Error"
+                    IsClosable="True"
+                    CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
+
+                <!-- Speakers -->
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Speakers" Style="{StaticResource SectionHeaderStyle}" />
+                        <ListView
+                            ItemsSource="{x:Bind ViewModel.Speakers, Mode=OneWay}"
+                            SelectedItem="{x:Bind ViewModel.SelectedSpeaker, Mode=TwoWay}"
+                            DisplayMemberPath="FriendlyName"
+                            MaxHeight="180"
+                            SelectionMode="Single"
+                            Background="{x:Null}"
+                            BorderThickness="0" />
+                        <Button HorizontalAlignment="Stretch" Command="{x:Bind ViewModel.RescanCommand}">
+                            <Grid HorizontalAlignment="Center">
+                                <StackPanel x:Name="RescanIdle" Orientation="Horizontal" Spacing="6"
+                                    Visibility="{x:Bind ViewModel.RescanCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                                    <FontIcon Glyph="&#xE777;" FontSize="14" />
+                                    <TextBlock Text="Rescan" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel x:Name="RescanBusy" Orientation="Horizontal" Spacing="8"
+                                    Visibility="{x:Bind ViewModel.RescanCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ProgressRing IsActive="True" Width="14" Height="14" />
+                                    <TextBlock Text="Scanning…" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Source -->
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Source" Style="{StaticResource SectionHeaderStyle}" />
+                        <RadioButton x:Name="WholeSystemRadio" Content="Whole system" GroupName="Source" IsChecked="True" Checked="WholeSystemRadio_Checked" />
+                        <RadioButton x:Name="ProcessRadio" Content="Per application" GroupName="Source" Checked="ProcessRadio_Checked" />
+                        <ComboBox
+                            ItemsSource="{x:Bind ViewModel.AudioProcesses, Mode=OneWay}"
+                            SelectedItem="{x:Bind ViewModel.SelectedProcess, Mode=TwoWay}"
+                            DisplayMemberPath="DisplayName"
+                            PlaceholderText="Select application"
+                            IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}"
+                            MaxHeight="200"
+                            HorizontalAlignment="Stretch" />
+                        <TextBlock Text="Format" Margin="0,8,0,0" />
+                        <ComboBox
+                            x:Name="FormatComboBox"
+                            ItemsSource="{x:Bind ViewModel.AvailableFormatNames}"
+                            SelectedIndex="{x:Bind ViewModel.SelectedFormatIndex, Mode=TwoWay}"
+                            IsEnabled="{x:Bind ViewModel.IsNotStreaming, Mode=OneWay}"
+                            HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Transport -->
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Stretch" MinWidth="130" Command="{x:Bind ViewModel.StartCommand}">
+                            <Grid HorizontalAlignment="Center">
+                                <StackPanel x:Name="StartIdle" Orientation="Horizontal" Spacing="6"
+                                    Visibility="{x:Bind ViewModel.StartCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                                    <FontIcon Glyph="&#xE768;" FontSize="14" />
+                                    <TextBlock Text="Start" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel x:Name="StartBusy" Orientation="Horizontal" Spacing="8"
+                                    Visibility="{x:Bind ViewModel.StartCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ProgressRing IsActive="True" Width="14" Height="14" />
+                                    <TextBlock Text="Starting…" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                        <Button HorizontalAlignment="Stretch" MinWidth="130" Command="{x:Bind ViewModel.StopCommand}">
+                            <Grid HorizontalAlignment="Center">
+                                <StackPanel x:Name="StopIdle" Orientation="Horizontal" Spacing="6"
+                                    Visibility="{x:Bind ViewModel.StopCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                                    <FontIcon Glyph="&#xE71A;" FontSize="14" />
+                                    <TextBlock Text="Stop" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel x:Name="StopBusy" Orientation="Horizontal" Spacing="8"
+                                    Visibility="{x:Bind ViewModel.StopCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ProgressRing IsActive="True" Width="14" Height="14" />
+                                    <TextBlock Text="Stopping…" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Right panel -->
+        <ScrollViewer Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
+            <StackPanel Spacing="16">
+
+                <!-- Levels -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Levels" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <controls:VuMeterControl Height="36" ValueL="{x:Bind ViewModel.VuL, Mode=OneWay}" ValueR="{x:Bind ViewModel.VuR, Mode=OneWay}" />
+                </Expander>
+
+                <!-- Volume & Balance -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Volume &amp; Balance" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <StackPanel Spacing="4">
+                        <Slider Header="Volume" Minimum="0" Maximum="8" StepFrequency="0.05"
+                            Value="{x:Bind ViewModel.Volume, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                        <TextBlock Text="Stereo balance" Margin="0,8,0,0" />
+                        <Slider Minimum="-1" Maximum="1" StepFrequency="0.01"
+                            Value="{x:Bind ViewModel.Balance, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- Channel Gain -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Channel gain" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <StackPanel Spacing="8">
+                        <CheckBox Content="Link L / R" IsChecked="{x:Bind ViewModel.GainLinked, Mode=TwoWay}" />
+                        <Slider Header="Left" Minimum="0" Maximum="3" StepFrequency="0.01"
+                            Value="{x:Bind ViewModel.GainL, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                        <Slider Header="Right" Minimum="0" Maximum="3" StepFrequency="0.01"
+                            Value="{x:Bind ViewModel.GainR, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- Equalizer -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Equalizer" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Stretch">
+                        <Slider Header="Low (dB)" Minimum="-12" Maximum="12" StepFrequency="0.5" Width="90"
+                            Value="{x:Bind ViewModel.EqLowDb, Mode=TwoWay}" />
+                        <Slider Header="Mid (dB)" Minimum="-12" Maximum="12" StepFrequency="0.5" Width="90"
+                            Value="{x:Bind ViewModel.EqMidDb, Mode=TwoWay}" />
+                        <Slider Header="High (dB)" Minimum="-12" Maximum="12" StepFrequency="0.5" Width="90"
+                            Value="{x:Bind ViewModel.EqHighDb, Mode=TwoWay}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- Delay -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Per-channel delay" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <Slider Header="Left (ms)" Minimum="0" Maximum="100" StepFrequency="0.5" Width="160"
+                            Value="{x:Bind ViewModel.DelayMsL, Mode=TwoWay}" />
+                        <Slider Header="Right (ms)" Minimum="0" Maximum="100" StepFrequency="0.5" Width="160"
+                            Value="{x:Bind ViewModel.DelayMsR, Mode=TwoWay}" />
+                    </StackPanel>
+                </Expander>
+
+                <!-- Spectrum -->
+                <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Expander.Header>
+                        <TextBlock Text="Spectrum" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                    </Expander.Header>
+                    <controls:SpectrumControl Height="80" HorizontalAlignment="Stretch" Levels="{x:Bind ViewModel.Spectrum, Mode=OneWay}" />
+                </Expander>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Status bar -->
+        <Border Grid.Row="2" Grid.ColumnSpan="3"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,10">
+            <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
+                <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
+                <TextBlock Text="{x:Bind ViewModel.StateLabel, Mode=OneWay}" VerticalAlignment="Center" />
+                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.EncoderLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Page>

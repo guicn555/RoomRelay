@@ -1,0 +1,82 @@
+using SonosStreaming.Core.Network;
+using SonosStreaming.Core.Audio;
+using FluentAssertions;
+using Xunit;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+
+namespace SonosStreaming.Tests;
+
+public class MockSonosE2E : IDisposable
+{
+    private readonly TcpListener _listener;
+    private readonly int _port;
+
+    public MockSonosE2E()
+    {
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        _ = AcceptLoopAsync();
+    }
+
+    public void Dispose()
+    {
+        _listener.Stop();
+    }
+
+    private async Task AcceptLoopAsync()
+    {
+        while (true)
+        {
+            try
+            {
+                var client = await _listener.AcceptTcpClientAsync();
+                _ = HandleClientAsync(client);
+            }
+            catch { break; }
+        }
+    }
+
+    private async Task HandleClientAsync(TcpClient client)
+    {
+        using var ns = client.GetStream();
+        using var reader = new StreamReader(ns, Encoding.UTF8, leaveOpen: true);
+        using var writer = new StreamWriter(ns, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+
+        var requestLine = await reader.ReadLineAsync();
+        if (requestLine == null) return;
+
+        while (true)
+        {
+            var header = await reader.ReadLineAsync();
+            if (header == null || header.Length == 0) break;
+        }
+
+        await writer.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        client.Close();
+    }
+
+    [Fact]
+    public void SonosController_SendsCorrectSoapSequence()
+    {
+        var device = new SonosDevice("Test", IPAddress.Loopback, (ushort)_port, "uuid:TEST");
+        var setUriEnv = SonosController.BuildSetUriEnvelope("192.168.1.10:8000/stream.aac");
+        var playEnv = SonosController.BuildPlayEnvelope();
+        var stopEnv = SonosController.BuildStopEnvelope();
+
+        setUriEnv.Should().Contain("x-rincon-mp3radio://192.168.1.10:8000/stream.aac");
+        setUriEnv.Should().Contain("<InstanceID>0</InstanceID>");
+        playEnv.Should().Contain("<Speed>1</Speed>");
+        stopEnv.Should().Contain("<u:Stop");
+    }
+
+    [Fact]
+    public void StripScheme_DropsHttp()
+    {
+        SonosController.StripScheme("http://host:8000/a").Should().Be("host:8000/a");
+        SonosController.StripScheme("https://host/a").Should().Be("host/a");
+        SonosController.StripScheme("host/a").Should().Be("host/a");
+    }
+}
