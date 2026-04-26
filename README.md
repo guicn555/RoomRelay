@@ -1,15 +1,74 @@
 # RoomRelay
 
-Stream Windows 11 system audio to Sonos speakers over the LAN — whole
-system or a single application.
+[![GitHub Release](https://img.shields.io/github/v/release/guicn555/RoomRelay)](https://github.com/guicn555/RoomRelay/releases)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE)
+[![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
 
-A modern .NET 9 / WinUI 3 replacement for
-[SWYH (Stream What You Hear)](https://www.streamwhathyouhear.com/), which
-has been unmaintained since ~2019 and still targets old .NET Framework.
+RoomRelay is an open-source Windows app for streaming system audio or a
+single application's audio to Sonos speakers on your local network.
 
-**No third-party audio dependencies.** AAC encoding, sample-rate
-conversion, and WASAPI capture all go through built-in Windows APIs
-(Media Foundation + raw WASAPI via CsWin32). No FFmpeg, no NAudio.
+It is built for the gap Sonos does not cover directly on Windows: live PC
+audio from browsers, music apps, games, calls, media players, or any other
+audio source that Windows can capture. It works best for music, podcasts,
+radio, and background audio where a small network buffer is acceptable.
+
+## Download
+
+Download the latest release:
+
+- [Windows installer](https://github.com/guicn555/RoomRelay/releases/latest)
+- [Portable/self-contained ZIP](https://github.com/guicn555/RoomRelay/releases/latest)
+- [Checksums](https://github.com/guicn555/RoomRelay/releases/latest)
+
+The release build is fully self-contained. It bundles the .NET runtime,
+Windows App Runtime, and app dependencies.
+
+## Why RoomRelay?
+
+Sonos supports many music services directly, and Windows Media Player can
+cast media-library files to Sonos, but live Windows system/app audio is still
+awkward. RoomRelay gives that use case a native, open-source Windows app.
+
+| Option | Windows live system audio | Per-app audio | Open source | Notes |
+|---|---:|---:|---:|---|
+| **RoomRelay** | Yes | Yes | Yes | Native WinUI 3 app for Sonos over LAN |
+| Stream What You Hear | Yes | No | Yes | Older DLNA-style app; targets .NET Framework |
+| TuneBlade | Yes | No | No | AirPlay-oriented; best with AirPlay-compatible Sonos models |
+| Airfoil | No current Windows app | No current Windows app | No | Current Sonos support is Mac-focused; Windows version was retired |
+| Windows Media Player | No | No | No | Casts local library files, not live system/app audio |
+
+## Features
+
+- Stream the default Windows audio output to a Sonos room.
+- Stream audio from a selected application on supported Windows versions.
+- Discover Sonos speakers on the local network.
+- Collapse stereo pairs into one selectable room.
+- Built-in volume, per-channel gain, EQ, delay, VU, and spectrum tools.
+- Tray icon with show/quit actions and close-to-tray behavior.
+- Single-instance behavior: launching RoomRelay again restores the existing
+  window instead of opening a duplicate instance.
+- No FFmpeg, no NAudio, and no third-party audio runtime dependency. AAC
+  encoding, sample-rate conversion, and WASAPI capture use Windows APIs.
+
+## Known limitations
+
+- RoomRelay is for local-network Sonos streaming. It is not a remote access
+  or cloud streaming tool.
+- Like most network Sonos streaming approaches, it is not intended for
+  low-latency gaming or video sync.
+- Per-application capture depends on Windows process-loopback support and is
+  best on current Windows 11 builds.
+- The first run may require allowing the Windows Defender Firewall prompt on
+  the private network where your Sonos speakers live.
+- The local stream is not encrypted or authenticated. Use RoomRelay only on
+  trusted private networks.
+
+## Feedback
+
+Bug reports and feature requests are welcome in
+[GitHub Issues](https://github.com/guicn555/RoomRelay/issues). General ideas,
+speaker compatibility reports, and setup notes belong in
+[GitHub Discussions](https://github.com/guicn555/RoomRelay/discussions).
 
 ## Requirements
 
@@ -17,7 +76,7 @@ conversion, and WASAPI capture all go through built-in Windows APIs
 |---|---|---|
 | **OS** | Windows 10 22H2 | Windows 11 23H2 or later |
 
-> **Zero dependencies.** The release build is fully self-contained — .NET 9
+> **Zero dependencies.** The release build is fully self-contained: .NET 9
 > runtime, Windows App Runtime 1.8, and all libraries are bundled. Nothing
 > to install beforehand.
 
@@ -30,15 +89,10 @@ conversion, and WASAPI capture all go through built-in Windows APIs
 - **WASAPI shared-mode loopback** works on both, but the developer
   test matrix is Windows 11-only.
 
-## Download
+## Quick start
 
-[![GitHub Release](https://img.shields.io/github/v/release/guicn555/RoomRelay)](https://github.com/guicn555/RoomRelay/releases)
-
-Download the latest ZIP from the [Releases page](https://github.com/guicn555/RoomRelay/releases).
-
-Extract and run `RoomRelay.exe`. **No additional runtime or framework
-installation required** — the build is fully self-contained (all dependencies
-are bundled). Settings are stored in `%APPDATA%\RoomRelay`.
+Install RoomRelay from the installer, or extract the ZIP and run
+`RoomRelay.exe`. Settings are stored in `%APPDATA%\RoomRelay`.
 
 > Prefer an installer? See [`csharp/installer/`](csharp/installer/) for an
 > [Inno Setup](https://jrsoftware.org/isinfo.php) script that builds a
