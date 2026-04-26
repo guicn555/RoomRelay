@@ -40,4 +40,8 @@
     <ApplicationIcon>Assets\sonos-streaming.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(WindowsAppSDKSelfContained)' == 'true'">
+    <DefineConstants>$(DefineConstants);WINDOWS_APP_SDK_SELF_CONTAINED</DefineConstants>
+  </PropertyGroup>
+
 </Project>

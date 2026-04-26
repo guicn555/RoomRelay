@@ -1,6 +1,8 @@
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+#if !WINDOWS_APP_SDK_SELF_CONTAINED
 using Microsoft.Windows.ApplicationModel.DynamicDependency;
+#endif
 
 namespace SonosStreaming.App;
 
@@ -34,7 +36,9 @@ public static class Program
 
         ShowWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
 
+#if !WINDOWS_APP_SDK_SELF_CONTAINED
         Bootstrap.Initialize(0x00010008);
+#endif
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
         Application.Start(p =>

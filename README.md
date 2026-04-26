@@ -12,6 +12,8 @@ audio from browsers, music apps, games, calls, media players, or any other
 audio source that Windows can capture. It works best for music, podcasts,
 radio, and background audio where a small network buffer is acceptable.
 
+![RoomRelay main window](docs/assets/roomrelay-main.png)
+
 ## Download
 
 Download the latest release:
