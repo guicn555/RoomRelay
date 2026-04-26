@@ -93,11 +93,9 @@ public sealed class PipelineRunner : IDisposable
         Log.Information("Capture format: {Rate} Hz, {Ch} ch, {Bits}-bit, float={IsFloat}",
             mix.SampleRate, mix.Channels, mix.BitsPerSample, mix.IsFloat);
 
-        _resampler = new Resampler(mix.SampleRate, mix.Channels);
-        // Encoder is constructed inside the pump task below — MF COM objects
-        // must be created and used on the same apartment, and the pump runs
-        // on an MTA thread-pool thread while this method is typically invoked
-        // on the UI (STA) thread.
+        // Media Foundation COM objects are constructed inside the pump task
+        // below so creation, use, and release all happen on the same MTA
+        // thread. StartAsync is typically invoked on the UI STA thread.
 
         _framesEmitted = 0;
         _pipelineStart = DateTime.UtcNow;
@@ -175,11 +173,8 @@ public sealed class PipelineRunner : IDisposable
             _pumpTask = null;
         }
 
-        _encoder?.Dispose();
-        _encoder = null;
-
-        _resampler?.Dispose();
-        _resampler = null;
+        // The pump owns and disposes Media Foundation objects on its own
+        // thread. They should already be null after the awaited pump exit.
 
         if (_clientCountTask != null)
         {
@@ -213,80 +208,89 @@ public sealed class PipelineRunner : IDisposable
         Log.Information("Pipeline pump loop starting");
         try
         {
-        _encoder = Format switch
-        {
-            StreamingFormat.Aac128 => new MfAacEncoder(128_000),
-            StreamingFormat.Aac192 => new MfAacEncoder(192_000),
-            StreamingFormat.Aac256 => new MfAacEncoder(256_000),
-            StreamingFormat.Aac320 => new MfAacEncoder(320_000),
-            StreamingFormat.Lpcm   => (IAudioEncoder)new LpcmEncoder(),
-            _                      => new MfAacEncoder(256_000),
-        };
-        int iter = 0;
-        while (!ct.IsCancellationRequested)
-        {
-            iter++;
-            PcmFrameF32? frame;
-            try
+            var mix = CurrentMixFormat ?? throw new InvalidOperationException("Pipeline started without a capture format.");
+            _resampler = new Resampler(mix.SampleRate, mix.Channels);
+            _encoder = Format switch
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(100));
-                frame = await _audioSource!.NextFrameAsync(timeoutCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                StreamingFormat.Aac128 => new MfAacEncoder(128_000),
+                StreamingFormat.Aac192 => new MfAacEncoder(192_000),
+                StreamingFormat.Aac256 => new MfAacEncoder(256_000),
+                StreamingFormat.Aac320 => new MfAacEncoder(320_000),
+                StreamingFormat.Lpcm   => (IAudioEncoder)new LpcmEncoder(),
+                _                      => new MfAacEncoder(256_000),
+            };
+
+            int iter = 0;
+            while (!ct.IsCancellationRequested)
             {
-                var mix = CurrentMixFormat!;
-                var silenceSamples = (int)(mix.SampleRate / 10) * mix.Channels;
-                frame = PcmFrameF32.Silent(silenceSamples / mix.Channels, mix.SampleRate, mix.Channels);
+                iter++;
+                PcmFrameF32? frame;
+                try
+                {
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(100));
+                    frame = await _audioSource!.NextFrameAsync(timeoutCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    var silenceSamples = (int)(mix.SampleRate / 10) * mix.Channels;
+                    frame = PcmFrameF32.Silent(silenceSamples / mix.Channels, mix.SampleRate, mix.Channels);
+                }
+                catch (OperationCanceledException) { break; }
+
+                if (frame == null) { Log.Warning("Pump got null frame at iter={Iter}, exiting", iter); break; }
+                if (iter <= 3)
+                    Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
+
+                var samples = frame.Samples.AsSpan();
+                _gainStage.Apply(samples, frame.Channels);
+                _equalizer.Process(samples, frame.Channels);
+                _channelDelay.Process(samples, frame.Channels);
+                _volumeStage.Apply(samples);
+                _vuMeter.Process(samples, frame.Channels);
+                _spectrumAnalyzer.Process(samples, frame.Channels);
+
+                var i16Frame = _resampler.Process(frame);
+                _encoder.Encode(i16Frame);
+                var chunk = _encoder.FlushChunk();
+                if (!chunk.IsEmpty)
+                {
+                    _broadcast.Write(chunk);
+                    _framesEmitted++;
+                }
+
+                var now = DateTime.UtcNow;
+                if ((now - _lastFrameLog).TotalSeconds >= 3)
+                {
+                    Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}",
+                        _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds), _broadcast.SubscriberCount);
+                    _lastFrameLog = now;
+                }
             }
-            catch (OperationCanceledException) { break; }
 
-            if (frame == null) { Log.Warning("Pump got null frame at iter={Iter}, exiting", iter); break; }
-            if (iter <= 3)
-                Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
-
-            var samples = frame.Samples.AsSpan();
-            _gainStage.Apply(samples, frame.Channels);
-            _equalizer.Process(samples, frame.Channels);
-            _channelDelay.Process(samples, frame.Channels);
-            _volumeStage.Apply(samples);
-            _vuMeter.Process(samples, frame.Channels);
-            _spectrumAnalyzer.Process(samples, frame.Channels);
-
-            var i16Frame = _resampler!.Process(frame);
-            _encoder!.Encode(i16Frame);
-            var chunk = _encoder.FlushChunk();
-            if (!chunk.IsEmpty)
+            if (_encoder != null)
             {
-                _broadcast.Write(chunk);
-                _framesEmitted++;
+                try
+                {
+                    var drained = _encoder.Drain();
+                    if (!drained.IsEmpty)
+                        _broadcast.Write(drained);
+                }
+                catch { }
             }
-
-            var now = DateTime.UtcNow;
-            if ((now - _lastFrameLog).TotalSeconds >= 3)
-            {
-                Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}",
-                    _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds), _broadcast.SubscriberCount);
-                _lastFrameLog = now;
-            }
-        }
-
-        if (_encoder != null)
-        {
-            try
-            {
-                var drained = _encoder.Drain();
-                if (!drained.IsEmpty)
-                    _broadcast.Write(drained);
-            }
-            catch { }
-        }
-        Log.Information("Pipeline pump loop exited normally ({Frames} frames emitted)", _framesEmitted);
+            Log.Information("Pipeline pump loop exited normally ({Frames} frames emitted)", _framesEmitted);
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Pipeline pump loop crashed after {Frames} frames", _framesEmitted);
             PumpCrashed?.Invoke(this, ex);
+        }
+        finally
+        {
+            _encoder?.Dispose();
+            _encoder = null;
+            _resampler?.Dispose();
+            _resampler = null;
         }
     }
 
@@ -296,8 +300,8 @@ public sealed class PipelineRunner : IDisposable
     {
         _cts?.Cancel();
         _audioSource?.Dispose();
-        _encoder?.Dispose();
-        _resampler?.Dispose();
+        // The pump owns Media Foundation objects; disposing them from here
+        // can cross COM apartments and crash native MFTs.
         _streamServer?.Dispose();
         _muteGuard?.Dispose();
         _endpointMonitor?.Dispose();
