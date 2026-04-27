@@ -157,12 +157,21 @@ var headerStr = "HTTP/1.0 200 OK\r\n" +
             var subscription = _broadcast.Subscribe();
             long bytes = 0;
             int frames = 0;
+            var slowWrites = 0;
             var t0 = DateTime.UtcNow;
             try
             {
                 await foreach (var frame in subscription.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
                 {
+                    var writeStart = DateTime.UtcNow;
                     await ns.WriteAsync(frame, _cts.Token).ConfigureAwait(false);
+                    var writeMs = (DateTime.UtcNow - writeStart).TotalMilliseconds;
+                    if (writeMs > 250)
+                    {
+                        slowWrites++;
+                        Log.Warning("Slow stream write to {Peer}: {Bytes} bytes in {Ms:F0} ms (format={Format})",
+                            peer, frame.Length, writeMs, _format);
+                    }
                     bytes += frame.Length;
                     frames++;
                 }
@@ -172,8 +181,8 @@ var headerStr = "HTTP/1.0 200 OK\r\n" +
             catch (IOException ex) { Log.Information("Client {Peer} IO ended: {Msg}", peer, ex.Message); }
             catch (SocketException ex) { Log.Information("Client {Peer} socket ended: {Msg}", peer, ex.Message); }
             var elapsed = (DateTime.UtcNow - t0).TotalSeconds;
-            Log.Information("Client {Peer} closed: {Frames} frames, {Bytes} bytes, {Elapsed:F1}s ({Kbps:F0} kbps)",
-                peer, frames, bytes, elapsed, elapsed > 0 ? bytes * 8 / 1000 / elapsed : 0);
+            Log.Information("Client {Peer} closed: {Frames} frames, {Bytes} bytes, {Elapsed:F1}s ({Kbps:F0} kbps), slowWrites={SlowWrites}, format={Format}",
+                peer, frames, bytes, elapsed, elapsed > 0 ? bytes * 8 / 1000 / elapsed : 0, slowWrites, _format);
         }
         catch (Exception ex)
         {

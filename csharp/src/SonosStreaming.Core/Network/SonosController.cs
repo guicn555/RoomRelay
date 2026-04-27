@@ -7,6 +7,7 @@ namespace SonosStreaming.Core.Network;
 public sealed class SonosController : ISonosController
 {
     private const string SoapNsAvTransport = "urn:schemas-upnp-org:service:AVTransport:1";
+    private const string SoapNsRenderingControl = "urn:schemas-upnp-org:service:RenderingControl:1";
     private readonly HttpClient _http;
     public SonosController()
     {
@@ -57,6 +58,34 @@ public sealed class SonosController : ISonosController
                "</s:Envelope>";
     }
 
+    public static string BuildGetVolumeEnvelope()
+    {
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
+               " <s:Body>\r\n" +
+               $"  <u:GetVolume xmlns:u=\"{SoapNsRenderingControl}\">\r\n" +
+               "   <InstanceID>0</InstanceID>\r\n" +
+               "   <Channel>Master</Channel>\r\n" +
+               "  </u:GetVolume>\r\n" +
+               " </s:Body>\r\n" +
+               "</s:Envelope>";
+    }
+
+    public static string BuildSetVolumeEnvelope(int volume)
+    {
+        var clamped = Math.Clamp(volume, 0, 100);
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
+               " <s:Body>\r\n" +
+               $"  <u:SetVolume xmlns:u=\"{SoapNsRenderingControl}\">\r\n" +
+               "   <InstanceID>0</InstanceID>\r\n" +
+               "   <Channel>Master</Channel>\r\n" +
+               $"   <DesiredVolume>{clamped}</DesiredVolume>\r\n" +
+               "  </u:SetVolume>\r\n" +
+               " </s:Body>\r\n" +
+               "</s:Envelope>";
+    }
+
     public static string StripScheme(string url)
     {
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return url[7..];
@@ -87,9 +116,28 @@ public sealed class SonosController : ISonosController
         await CallAsync(device.AvTransportControlUrl, "Stop", BuildStopEnvelope(), ct).ConfigureAwait(false);
     }
 
+    public async Task<int> GetVolumeAsync(SonosDevice device, CancellationToken ct = default)
+    {
+        var body = await CallForBodyAsync(device.RenderingControlUrl, "GetVolume", BuildGetVolumeEnvelope(), SoapNsRenderingControl, ct).ConfigureAwait(false);
+        var value = ExtractElement(body, "CurrentVolume");
+        if (!int.TryParse(value, out var volume))
+            throw new InvalidOperationException("GetVolume response did not contain CurrentVolume.");
+        return Math.Clamp(volume, 0, 100);
+    }
+
+    public async Task SetVolumeAsync(SonosDevice device, int volume, CancellationToken ct = default)
+    {
+        await CallForBodyAsync(device.RenderingControlUrl, "SetVolume", BuildSetVolumeEnvelope(volume), SoapNsRenderingControl, ct).ConfigureAwait(false);
+    }
+
     private async Task CallAsync(string controlUrl, string action, string body, CancellationToken ct)
     {
-        var soapAction = $"\"{SoapNsAvTransport}#{action}\"";
+        _ = await CallForBodyAsync(controlUrl, action, body, SoapNsAvTransport, ct).ConfigureAwait(false);
+    }
+
+    private async Task<string> CallForBodyAsync(string controlUrl, string action, string body, string soapNs, CancellationToken ct)
+    {
+        var soapAction = $"\"{soapNs}#{action}\"";
         using var req = new HttpRequestMessage(HttpMethod.Post, controlUrl);
         req.Content = new StringContent(body, Encoding.UTF8, "text/xml");
         req.Headers.TryAddWithoutValidation("SOAPACTION", soapAction);
@@ -100,6 +148,20 @@ public sealed class SonosController : ISonosController
             var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new InvalidOperationException($"{action} failed: HTTP {(int)resp.StatusCode} body={text}");
         }
+
+        return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+    }
+
+    private static string? ExtractElement(string xml, string tag)
+    {
+        var open = $"<{tag}>";
+        var close = $"</{tag}>";
+        int start = xml.IndexOf(open, StringComparison.OrdinalIgnoreCase);
+        if (start < 0) return null;
+        start += open.Length;
+        int end = xml.IndexOf(close, start, StringComparison.OrdinalIgnoreCase);
+        if (end < 0) return null;
+        return xml[start..end].Trim();
     }
 
     private static string XmlEscape(string s)

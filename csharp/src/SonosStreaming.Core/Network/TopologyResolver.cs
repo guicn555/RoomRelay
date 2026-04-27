@@ -40,6 +40,69 @@ public sealed class TopologyResolver : ITopologyResolver
         return result;
     }
 
+    public static List<SonosZoneGroup> ExtractZoneGroups(string xml)
+    {
+        var decoded = DecodeXmlEntities(xml);
+        var result = new List<SonosZoneGroup>();
+        int pos = 0;
+        while (pos < decoded.Length)
+        {
+            int groupIdx = decoded.IndexOf("<ZoneGroup", pos, StringComparison.OrdinalIgnoreCase);
+            if (groupIdx < 0) break;
+
+            int startEnd = decoded.IndexOf('>', groupIdx);
+            if (startEnd < 0) break;
+
+            var attrs = decoded[groupIdx..startEnd];
+            var coordinator = ExtractAttr(attrs, "Coordinator");
+            if (string.IsNullOrWhiteSpace(coordinator))
+            {
+                pos = startEnd + 1;
+                continue;
+            }
+
+            int closeIdx = decoded.IndexOf("</ZoneGroup>", startEnd, StringComparison.OrdinalIgnoreCase);
+            int groupEnd = closeIdx >= 0 ? closeIdx : startEnd;
+            var groupXml = decoded[startEnd..groupEnd];
+            var members = ExtractGroupMembers(groupXml);
+            if (members.Count == 0)
+                members.Add(new SonosZoneMember(coordinator, null, null, null, null));
+
+            result.Add(new SonosZoneGroup(coordinator, members));
+            pos = closeIdx >= 0 ? closeIdx + "</ZoneGroup>".Length : startEnd + 1;
+        }
+
+        return result;
+    }
+
+    private static List<SonosZoneMember> ExtractGroupMembers(string groupXml)
+    {
+        var members = new List<SonosZoneMember>();
+        int pos = 0;
+        while (pos < groupXml.Length)
+        {
+            int memberIdx = groupXml.IndexOf("<ZoneGroupMember", pos, StringComparison.OrdinalIgnoreCase);
+            if (memberIdx < 0) break;
+            int memberEnd = groupXml.IndexOf('>', memberIdx);
+            if (memberEnd < 0) break;
+
+            var attrs = groupXml[memberIdx..memberEnd];
+            var uuid = ExtractAttr(attrs, "UUID");
+            if (!string.IsNullOrWhiteSpace(uuid))
+            {
+                var zoneName = ExtractAttr(attrs, "ZoneName");
+                var location = ExtractAttr(attrs, "Location");
+                var invisible = ExtractAttr(attrs, "Invisible");
+                var configuration = ExtractAttr(attrs, "Configuration");
+                members.Add(new SonosZoneMember(uuid, zoneName, location, invisible, configuration));
+            }
+
+            pos = memberEnd + 1;
+        }
+
+        return members;
+    }
+
     private static string? ExtractAttr(string fragment, string name)
     {
         int idx = fragment.IndexOf(name + "=\"", StringComparison.OrdinalIgnoreCase);
@@ -91,13 +154,29 @@ public sealed class TopologyResolver : ITopologyResolver
     {
         if (devices.Count == 0) return devices;
 
-        string? topologyXml = null;
+        var topologyXmls = new List<string>();
+        var knownUuids = devices.Select(d => StripUuidPrefix(d.Udn)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var coveredUuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var d in devices)
         {
+            var deviceUuid = StripUuidPrefix(d.Udn);
+            if (coveredUuids.Contains(deviceUuid) && coveredUuids.Count >= knownUuids.Count)
+                break;
+
             try
             {
-                topologyXml = await FetchZoneGroupStateAsync(d, ct).ConfigureAwait(false);
-                break;
+                var topologyXml = await FetchZoneGroupStateAsync(d, ct).ConfigureAwait(false);
+                topologyXmls.Add(topologyXml);
+
+                foreach (var group in ExtractZoneGroups(topologyXml))
+                foreach (var member in group.Members)
+                    coveredUuids.Add(member.Uuid);
+
+                Log.Debug("Resolved topology from {Name} ({Ip}); covered {Covered}/{Known} discovered UUID(s)",
+                    d.FriendlyName, d.Ip, coveredUuids.Count(u => knownUuids.Contains(u)), knownUuids.Count);
+
+                if (knownUuids.All(coveredUuids.Contains))
+                    break;
             }
             catch (Exception ex)
             {
@@ -105,34 +184,105 @@ public sealed class TopologyResolver : ITopologyResolver
             }
         }
 
-        if (topologyXml == null)
+        if (topologyXmls.Count == 0)
         {
             Log.Warning("Could not reach any speaker for topology; keeping full list");
             return devices;
         }
 
-        var coordinators = ExtractCoordinatorUuids(topologyXml);
-        if (coordinators.Count == 0)
+        var resolved = ResolveDevicesFromTopologies(devices, topologyXmls);
+        if (resolved.Count == 0)
         {
-            Log.Warning("No coordinators found in topology response; keeping full list");
+            Log.Warning("No rooms found in topology response; keeping full list");
             return devices;
         }
 
-        var zoneNames = ExtractZoneNames(topologyXml);
-
-        return devices
-            .Where(d => coordinators.Contains(StripUuidPrefix(d.Udn)))
-            .Select(d =>
-            {
-                var uuid = StripUuidPrefix(d.Udn);
-                return zoneNames.TryGetValue(uuid, out var room)
-                    ? d with { FriendlyName = room }
-                    : d;
-            })
-            .ToList();
+        Log.Information("Topology resolved {InputCount} discovered speaker(s) to {OutputCount} selectable room/group(s)",
+            devices.Count, resolved.Count);
+        return resolved;
     }
 
-    private static string StripUuidPrefix(string udn) =>
+    public static List<SonosDevice> ResolveDevicesFromTopologies(List<SonosDevice> devices, IEnumerable<string> topologyXmls)
+    {
+        var byUuid = devices.ToDictionary(d => StripUuidPrefix(d.Udn), StringComparer.OrdinalIgnoreCase);
+        var output = new List<SonosDevice>();
+        var emittedUuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var coveredUuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var topologyXml in topologyXmls)
+        {
+            foreach (var group in ExtractZoneGroups(topologyXml))
+            {
+                foreach (var member in group.Members)
+                    coveredUuids.Add(member.Uuid);
+
+                if (!group.Members.Any(m => byUuid.ContainsKey(m.Uuid)) && !byUuid.ContainsKey(group.CoordinatorUuid))
+                    continue;
+
+                if (emittedUuids.Contains(group.CoordinatorUuid))
+                    continue;
+
+                var device = BuildGroupDevice(group, byUuid);
+                if (device == null)
+                    continue;
+
+                output.Add(device);
+                emittedUuids.Add(group.CoordinatorUuid);
+            }
+        }
+
+        foreach (var device in devices)
+        {
+            var uuid = StripUuidPrefix(device.Udn);
+            if (coveredUuids.Contains(uuid))
+                continue;
+            if (emittedUuids.Add(uuid))
+                output.Add(device);
+        }
+
+        return output;
+    }
+
+    private static SonosDevice? BuildGroupDevice(SonosZoneGroup group, Dictionary<string, SonosDevice> byUuid)
+    {
+        byUuid.TryGetValue(group.CoordinatorUuid, out var coordinatorDevice);
+        var coordinatorMember = group.Members.FirstOrDefault(m => string.Equals(m.Uuid, group.CoordinatorUuid, StringComparison.OrdinalIgnoreCase));
+        var endpoint = coordinatorDevice ?? DeviceFromMember(coordinatorMember, group.CoordinatorUuid);
+        if (endpoint == null)
+            return null;
+
+        var memberNames = group.Members
+            .Select(m => !string.IsNullOrWhiteSpace(m.ZoneName) ? m.ZoneName! : byUuid.GetValueOrDefault(m.Uuid)?.FriendlyName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => n!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var fallbackName = coordinatorDevice?.FriendlyName ?? endpoint.FriendlyName;
+        var name = memberNames.Count switch
+        {
+            0 => fallbackName,
+            1 => memberNames[0],
+            <= 3 => string.Join(" + ", memberNames),
+            _ => $"{memberNames[0]} + {memberNames.Count - 1} rooms",
+        };
+
+        return endpoint with { FriendlyName = name, Udn = $"uuid:{group.CoordinatorUuid}" };
+    }
+
+    private static SonosDevice? DeviceFromMember(SonosZoneMember? member, string uuid)
+    {
+        if (member == null || string.IsNullOrWhiteSpace(member.Location))
+            return null;
+
+        var parsed = SsdpDiscovery.ParseLocation(member.Location);
+        if (parsed == null)
+            return null;
+
+        return new SonosDevice(member.ZoneName ?? $"Sonos {uuid}", parsed.Value.Ip, parsed.Value.Port, $"uuid:{uuid}");
+    }
+
+    public static string StripUuidPrefix(string udn) =>
         udn.StartsWith("uuid:", StringComparison.OrdinalIgnoreCase) ? udn[5..] : udn;
 
     private async Task<string> FetchZoneGroupStateAsync(SonosDevice device, CancellationToken ct)
@@ -155,3 +305,7 @@ public sealed class TopologyResolver : ITopologyResolver
         return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
     }
 }
+
+public sealed record SonosZoneMember(string Uuid, string? ZoneName, string? Location, string? Invisible, string? Configuration);
+
+public sealed record SonosZoneGroup(string CoordinatorUuid, List<SonosZoneMember> Members);

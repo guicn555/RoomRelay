@@ -11,6 +11,7 @@ public sealed class SpectrumAnalyzer
     private readonly float[] _rightAccum;
     private readonly float[] _magnitudes;
     private readonly float[] _bandLevels;
+    private readonly float[] _targetBandLevels;
     private int _accumCount;
 
     public ReadOnlySpan<float> BandLevels => _bandLevels;
@@ -24,6 +25,7 @@ public sealed class SpectrumAnalyzer
         _rightAccum = new float[_fftSize];
         _magnitudes = new float[_fftSize / 2];
         _bandLevels = new float[_numBands];
+        _targetBandLevels = new float[_numBands];
     }
 
     public void Process(ReadOnlySpan<float> samples, ushort channels)
@@ -79,7 +81,11 @@ public sealed class SpectrumAnalyzer
             for (int i = loBin; i <= hiBin; i++)
                 max = Math.Max(max, _magnitudes[i]);
 
-            _bandLevels[b] = Math.Clamp((max - FloorDb) / dbRange, 0f, 1f);
+            _targetBandLevels[b] = Math.Clamp((max - FloorDb) / dbRange, 0f, 1f);
+            var target = _targetBandLevels[b];
+            var current = _bandLevels[b];
+            var smoothing = target > current ? 0.35f : 0.10f;
+            _bandLevels[b] = current + (target - current) * smoothing;
         }
     }
 }

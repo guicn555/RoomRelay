@@ -22,7 +22,7 @@ public class StreamingFormatTests
     [InlineData(StreamingFormat.Aac192, "AAC 192 kbps")]
     [InlineData(StreamingFormat.Aac256, "AAC 256 kbps")]
     [InlineData(StreamingFormat.Aac320, "AAC 320 kbps")]
-    [InlineData(StreamingFormat.Lpcm, "LPCM (lossless)")]
+    [InlineData(StreamingFormat.Lpcm, "LPCM/WAV lossless (experimental)")]
     public void DisplayName_ReturnsExpectedLabel(StreamingFormat fmt, string expected)
     {
         fmt.DisplayName().Should().Be(expected);

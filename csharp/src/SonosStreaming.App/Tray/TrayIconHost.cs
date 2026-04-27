@@ -51,6 +51,8 @@ public sealed class TrayIconHost : IDisposable
             Items =
             {
                 new PopupMenuItem("Show app", (_, _) => RestoreWindow()),
+                new PopupMenuItem("Open logs folder", (_, _) => vm.OpenLogsFolderCommand.Execute(null)),
+                new PopupMenuItem("Create diagnostics package", (_, _) => _ = vm.CreateDiagnosticsPackageCommand.ExecuteAsync(null)),
                 new PopupMenuSeparator(),
                 new PopupMenuItem("Quit", (_, _) => QuitApp(vm)),
             },

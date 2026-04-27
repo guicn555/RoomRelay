@@ -31,18 +31,29 @@
 
     <Grid Padding="16">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="380" />
             <ColumnDefinition Width="12" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="12" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <MenuBar Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,10">
+            <MenuBarItem Title="File">
+                <MenuFlyoutItem Text="Open logs folder" Click="OpenLogsMenuItem_Click" />
+                <MenuFlyoutItem Text="Create diagnostics package" Click="CreateDiagnosticsMenuItem_Click" />
+            </MenuBarItem>
+            <MenuBarItem Title="Help">
+                <MenuFlyoutItem Text="About RoomRelay" Click="AboutMenuItem_Click" />
+            </MenuBarItem>
+        </MenuBar>
+
         <!-- Left panel -->
-        <ScrollViewer Grid.Column="0" VerticalScrollMode="Auto">
+        <ScrollViewer Grid.Row="1" Grid.Column="0" VerticalScrollMode="Auto">
             <StackPanel Spacing="16">
 
                 <InfoBar
@@ -56,7 +67,7 @@
                 <!-- Speakers -->
                 <Border Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="8">
-                        <TextBlock Text="Speakers" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock Text="Rooms &amp; groups" Style="{StaticResource SectionHeaderStyle}" />
                         <ListView
                             ItemsSource="{x:Bind ViewModel.Speakers, Mode=OneWay}"
                             SelectedItem="{x:Bind ViewModel.SelectedSpeaker, Mode=TwoWay}"
@@ -65,6 +76,10 @@
                             SelectionMode="Single"
                             Background="{x:Null}"
                             BorderThickness="0" />
+                        <TextBlock
+                            Text="Grouped rooms and stereo pairs are shown as one Sonos playback target."
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
                         <Button HorizontalAlignment="Stretch" Command="{x:Bind ViewModel.RescanCommand}">
                             <Grid HorizontalAlignment="Center">
                                 <StackPanel x:Name="RescanIdle" Orientation="Horizontal" Spacing="6"
@@ -79,6 +94,17 @@
                                 </StackPanel>
                             </Grid>
                         </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Manual speaker -->
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="Add by IP" Style="{StaticResource SectionHeaderStyle}" />
+                        <TextBlock
+                            Text="Use this if SSDP discovery misses a room. Manual entries are saved and included in future scans."
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
                         <Grid ColumnSpacing="8" Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -123,6 +149,7 @@
                         <TextBlock Text="Source" Style="{StaticResource SectionHeaderStyle}" />
                         <RadioButton x:Name="WholeSystemRadio" Content="Whole system" GroupName="Source" IsChecked="True" Checked="WholeSystemRadio_Checked" />
                         <RadioButton x:Name="ProcessRadio" Content="Per application" GroupName="Source" Checked="ProcessRadio_Checked" />
+                        <TextBlock Text="Per-application capture uses Windows process loopback and works best on current Windows 11 builds. Use Whole system if an app does not appear or cannot start." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <ComboBox
                             ItemsSource="{x:Bind ViewModel.AudioProcesses, Mode=OneWay}"
                             SelectedItem="{x:Bind ViewModel.SelectedProcess, Mode=TwoWay}"
@@ -132,6 +159,7 @@
                             MaxHeight="200"
                             HorizontalAlignment="Stretch" />
                         <TextBlock Text="Format" Margin="0,8,0,0" />
+                        <TextBlock Text="AAC is the stable default with Sonos buffering latency. LPCM is lower-latency, high-bandwidth, and experimental." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <ComboBox
                             x:Name="FormatComboBox"
                             ItemsSource="{x:Bind ViewModel.AvailableFormatNames}"
@@ -178,7 +206,7 @@
         </ScrollViewer>
 
         <!-- Right panel -->
-        <ScrollViewer Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
+        <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
             <StackPanel Spacing="16">
 
                 <!-- Levels -->
@@ -195,11 +223,19 @@
                         <TextBlock Text="Volume &amp; Balance" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
                     </Expander.Header>
                     <StackPanel Spacing="4">
-                        <Slider Header="Volume" Minimum="0" Maximum="8" StepFrequency="0.05"
+                        <TextBlock Text="These controls change the RoomRelay stream before it reaches Sonos; they do not change Sonos device volume." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Slider Header="Stream volume" Minimum="0" Maximum="8" StepFrequency="0.05"
                             Value="{x:Bind ViewModel.Volume, Mode=TwoWay}" HorizontalAlignment="Stretch" />
                         <TextBlock Text="Stereo balance" Margin="0,8,0,0" />
                         <Slider Minimum="-1" Maximum="1" StepFrequency="0.01"
                             Value="{x:Bind ViewModel.Balance, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                        <TextBlock Text="Sonos device volume" Margin="0,8,0,0" />
+                        <Slider Minimum="0" Maximum="100" StepFrequency="1"
+                            Value="{x:Bind ViewModel.SonosVolume, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Refresh" Command="{x:Bind ViewModel.RefreshSonosVolumeCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ViewModel.SonosVolumeStatus, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </Expander>
 
@@ -257,7 +293,7 @@
         </ScrollViewer>
 
         <!-- Status bar -->
-        <Border Grid.Row="2" Grid.ColumnSpan="3"
+        <Border Grid.Row="3" Grid.ColumnSpan="3"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
@@ -266,6 +302,8 @@
             <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
                 <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
                 <TextBlock Text="{x:Bind ViewModel.StateLabel, Mode=OneWay}" VerticalAlignment="Center" />
+                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.SelectedSpeakerLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                 <TextBlock Text="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />

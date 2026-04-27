@@ -27,7 +27,7 @@ public static class StreamingFormatExtensions
         StreamingFormat.Aac192 => "AAC 192 kbps",
         StreamingFormat.Aac256 => "AAC 256 kbps",
         StreamingFormat.Aac320 => "AAC 320 kbps",
-        StreamingFormat.Lpcm   => "LPCM (lossless)",
+        StreamingFormat.Lpcm   => "LPCM/WAV lossless (experimental)",
         _ => "AAC 256 kbps",
     };
 

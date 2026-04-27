@@ -26,6 +26,10 @@ public sealed partial class App : Application
                 rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
+        Log.Information("RoomRelay {Version} starting on {OS}",
+            DiagnosticsPackageService.VersionLabel,
+            System.Runtime.InteropServices.RuntimeInformation.OSDescription);
+
         var services = new ServiceCollection();
         services.AddSingleton<AppCore>();
         services.AddSingleton<PipelineOptions>();
@@ -36,6 +40,7 @@ public sealed partial class App : Application
         services.AddSingleton<ISsdpDiscovery, SsdpDiscovery>();
         services.AddSingleton<ITopologyResolver, TopologyResolver>();
         services.AddSingleton<SharedGuiBridge>();
+        services.AddSingleton<DiagnosticsPackageService>();
         services.AddSingleton<MainViewModel>();
         services.AddSingleton<TrayIconHost>();
         Services = services.BuildServiceProvider();
