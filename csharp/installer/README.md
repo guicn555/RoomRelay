@@ -8,7 +8,7 @@ This folder contains an [Inno Setup](https://jrsoftware.org/isinfo.php) script t
 2. Publish the app:
    ```powershell
    cd ..\..\csharp
-   dotnet publish src\SonosStreaming.App -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -o publish\RoomRelay-v1.0.2
+   dotnet publish src\SonosStreaming.App -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -o publish\RoomRelay-v1.0.3
    ```
 
 ## Build the Installer
@@ -19,7 +19,7 @@ Open `installer.iss` in Inno Setup Compiler (or right-click → **Compile**), or
 iscc installer.iss
 ```
 
-The installer `RoomRelay-Setup-1.0.2.exe` will be created in `csharp\`.
+The installer `RoomRelay-Setup-1.0.3.exe` will be created in `csharp\`.
 
 ## What the Installer Does
 
@@ -32,7 +32,7 @@ The installer `RoomRelay-Setup-1.0.2.exe` will be created in `csharp\`.
 ## Silent Install (Enterprise/Deployment)
 
 ```powershell
-RoomRelay-Setup-1.0.2.exe /VERYSILENT /NORESTART
+RoomRelay-Setup-1.0.3.exe /VERYSILENT /NORESTART
 ```
 
 ## Size
