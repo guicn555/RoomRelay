@@ -79,6 +79,41 @@
                                 </StackPanel>
                             </Grid>
                         </Button>
+                        <Grid ColumnSpacing="8" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="72" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox
+                                Header="IP address"
+                                PlaceholderText="192.168.1.50"
+                                Text="{x:Bind ViewModel.ManualSpeakerIp, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                IsEnabled="{x:Bind ViewModel.CanAddManualSpeaker, Mode=OneWay}" />
+                            <TextBox
+                                Grid.Column="1"
+                                Header="Port"
+                                Text="{x:Bind ViewModel.ManualSpeakerPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                IsEnabled="{x:Bind ViewModel.CanAddManualSpeaker, Mode=OneWay}"
+                                MaxLength="5" />
+                        </Grid>
+                        <Button HorizontalAlignment="Stretch" Command="{x:Bind ViewModel.AddManualSpeakerCommand}">
+                            <Grid HorizontalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="6"
+                                    Visibility="{x:Bind ViewModel.AddManualSpeakerCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                                    <FontIcon Glyph="&#xE710;" FontSize="14" />
+                                    <TextBlock Text="Add manual speaker" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="8"
+                                    Visibility="{x:Bind ViewModel.AddManualSpeakerCommand.IsRunning, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <ProgressRing IsActive="True" Width="14" Height="14" />
+                                    <TextBlock Text="Adding..." VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Grid>
+                        </Button>
+                        <TextBlock
+                            Text="{x:Bind ViewModel.ManualSpeakerStatus, Mode=OneWay}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 

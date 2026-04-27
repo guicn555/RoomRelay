@@ -50,7 +50,12 @@ public class AppSettingsTests : IDisposable
             EqHighDb = 1.5f,
             DelayMsL = 10.0f,
             DelayMsR = 5.0f,
-            LastSpeakerUdn = "uuid:test-speaker"
+            LastSpeakerUdn = "uuid:test-speaker",
+            ManualSpeakerEndpoints =
+            [
+                new ManualSpeakerEndpoint { Ip = "192.168.1.50", Port = 1400 },
+                new ManualSpeakerEndpoint { Ip = "192.168.1.51", Port = 1500 },
+            ]
         };
 
         original.Save();
@@ -67,6 +72,7 @@ public class AppSettingsTests : IDisposable
         loaded.DelayMsL.Should().Be(10.0f);
         loaded.DelayMsR.Should().Be(5.0f);
         loaded.LastSpeakerUdn.Should().Be("uuid:test-speaker");
+        loaded.ManualSpeakerEndpoints.Should().BeEquivalentTo(original.ManualSpeakerEndpoints);
     }
 
     [Fact]

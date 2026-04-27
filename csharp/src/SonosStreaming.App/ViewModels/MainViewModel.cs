@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Net;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -89,6 +90,15 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string EncoderLabel { get; set; }
 
+    [ObservableProperty]
+    public partial string ManualSpeakerIp { get; set; }
+
+    [ObservableProperty]
+    public partial string ManualSpeakerPort { get; set; }
+
+    [ObservableProperty]
+    public partial string ManualSpeakerStatus { get; set; }
+
     public StreamingFormat[] AvailableFormats { get; } = Enum.GetValues<StreamingFormat>();
     public string[] AvailableFormatNames { get; } = Enum.GetValues<StreamingFormat>().Select(f => f.DisplayName()).ToArray();
 
@@ -129,6 +139,9 @@ public sealed partial class MainViewModel : ObservableObject
         ErrorMessage = "";
         SelectedFormat = settings.StreamingFormat;
         EncoderLabel = settings.StreamingFormat.DisplayName();
+        ManualSpeakerIp = "";
+        ManualSpeakerPort = "1400";
+        ManualSpeakerStatus = "";
         Pipeline.Format = settings.StreamingFormat;
 
         // Apply persisted settings to pipeline stages so restart restores the
@@ -232,6 +245,18 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedFormatIndex));
     }
 
+    partial void OnManualSpeakerIpChanged(string value)
+    {
+        ManualSpeakerStatus = "";
+        AddManualSpeakerCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnManualSpeakerPortChanged(string value)
+    {
+        ManualSpeakerStatus = "";
+        AddManualSpeakerCommand.NotifyCanExecuteChanged();
+    }
+
     partial void OnSelectedProcessChanged(AudioProcess? value)
     {
         if (value != null)
@@ -302,25 +327,28 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     public async Task RescanAsync()
     {
+        List<SonosDevice> raw = new();
         try
         {
-            var raw = await _discovery.ScanAsync(3000);
-            var resolved = await _topology.ResolveCoordinatorsAsync(raw);
-            Speakers.Clear();
-            foreach (var d in resolved) Speakers.Add(d);
-            _core.SetDiscovered(resolved);
-            Log.Information("Discovered {Count} speaker(s)", resolved.Count);
-
-            // Re-select the user's last speaker automatically if it's in range.
-            if (SelectedSpeaker == null && !string.IsNullOrEmpty(Settings.LastSpeakerUdn))
-            {
-                var match = resolved.FirstOrDefault(d => d.Udn == Settings.LastSpeakerUdn);
-                if (match != null) SelectSpeaker(match);
-            }
+            raw = await _discovery.ScanAsync(3000);
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "SSDP scan failed");
+        }
+
+        var manual = await LookupSavedManualSpeakersAsync();
+        var mergedRaw = SsdpDiscovery.MergeDevices(raw, manual);
+        var resolved = await ResolveWithFallbackAsync(mergedRaw);
+        SyncSpeakers(resolved);
+        _core.SetDiscovered(resolved);
+        Log.Information("Discovered {Count} speaker(s)", resolved.Count);
+
+        // Re-select the user's last speaker automatically if it's in range.
+        if (SelectedSpeaker == null && !string.IsNullOrEmpty(Settings.LastSpeakerUdn))
+        {
+            var match = resolved.FirstOrDefault(d => d.Udn == Settings.LastSpeakerUdn);
+            if (match != null) SelectSpeaker(match);
         }
 
         try
@@ -332,6 +360,42 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to enumerate audio processes");
+        }
+    }
+
+    public bool CanAddManualSpeaker => StateLabel == "Idle";
+
+    [RelayCommand(CanExecute = nameof(CanAddManualSpeaker))]
+    public async Task AddManualSpeakerAsync()
+    {
+        if (!TryParseManualEndpoint(ManualSpeakerIp, ManualSpeakerPort, out var ip, out var port, out var error))
+        {
+            ManualSpeakerStatus = error;
+            return;
+        }
+
+        try
+        {
+            ManualSpeakerStatus = "Looking up speaker...";
+            var direct = await _discovery.LookupAsync(ip, port);
+            var resolved = await ResolveWithFallbackAsync([direct]);
+            var merged = SsdpDiscovery.MergeDevices(Speakers, resolved);
+            SyncSpeakers(merged);
+            _core.SetDiscovered(merged);
+
+            AddSavedManualEndpoint(ip, port);
+
+            var selected = FindMatchingSpeaker(resolved.First(), merged) ?? resolved.First();
+            SelectSpeaker(selected);
+
+            ManualSpeakerIp = "";
+            ManualSpeakerPort = "1400";
+            ManualSpeakerStatus = $"Added {selected.FriendlyName}";
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Manual speaker lookup failed for {Ip}:{Port}", ip, port);
+            ManualSpeakerStatus = $"Could not reach {ip}:{port}";
         }
     }
 
@@ -372,7 +436,9 @@ public sealed partial class MainViewModel : ObservableObject
     {
         StartCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
+        AddManualSpeakerCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsNotStreaming));
+        OnPropertyChanged(nameof(CanAddManualSpeaker));
         StatusBrush = value switch
         {
             "Streaming" => new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
@@ -380,6 +446,100 @@ public sealed partial class MainViewModel : ObservableObject
             _ => new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange),
         };
     }
+
+    private async Task<List<SonosDevice>> LookupSavedManualSpeakersAsync()
+    {
+        var devices = new List<SonosDevice>();
+        foreach (var endpoint in Settings.ManualSpeakerEndpoints)
+        {
+            if (!IPAddress.TryParse(endpoint.Ip, out var ip))
+            {
+                Log.Warning("Skipping invalid saved manual speaker endpoint {Ip}:{Port}", endpoint.Ip, endpoint.Port);
+                continue;
+            }
+
+            try
+            {
+                devices.Add(await _discovery.LookupAsync(ip, endpoint.Port));
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Saved manual speaker lookup failed for {Ip}:{Port}", endpoint.Ip, endpoint.Port);
+            }
+        }
+
+        return devices;
+    }
+
+    private async Task<List<SonosDevice>> ResolveWithFallbackAsync(List<SonosDevice> devices)
+    {
+        try
+        {
+            var resolved = await _topology.ResolveCoordinatorsAsync(devices);
+            return resolved.Count == 0 && devices.Count > 0 ? devices : resolved;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Topology resolution failed; keeping directly discovered speaker(s)");
+            return devices;
+        }
+    }
+
+    private static bool TryParseManualEndpoint(
+        string ipText,
+        string portText,
+        out IPAddress ip,
+        out ushort port,
+        out string error)
+    {
+        ip = IPAddress.None;
+        port = 1400;
+        error = "";
+
+        if (!IPAddress.TryParse(ipText.Trim(), out ip!))
+        {
+            error = "Enter a valid IP address.";
+            return false;
+        }
+
+        var trimmedPort = portText.Trim();
+        if (string.IsNullOrEmpty(trimmedPort))
+        {
+            port = 1400;
+            return true;
+        }
+
+        if (!ushort.TryParse(trimmedPort, out port) || port == 0)
+        {
+            error = "Enter a port from 1 to 65535.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private void SyncSpeakers(List<SonosDevice> devices)
+    {
+        Speakers.Clear();
+        foreach (var d in devices) Speakers.Add(d);
+    }
+
+    private void AddSavedManualEndpoint(IPAddress ip, ushort port)
+    {
+        var ipText = ip.ToString();
+        if (Settings.ManualSpeakerEndpoints.Any(e =>
+                e.Port == port &&
+                string.Equals(e.Ip, ipText, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        Settings.ManualSpeakerEndpoints.Add(new ManualSpeakerEndpoint { Ip = ipText, Port = port });
+        Settings.Save();
+    }
+
+    private static SonosDevice? FindMatchingSpeaker(SonosDevice device, IEnumerable<SonosDevice> candidates) =>
+        candidates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Udn, device.Udn, StringComparison.OrdinalIgnoreCase) ||
+            candidate.Ip.Equals(device.Ip) && candidate.Port == device.Port);
 
     partial void OnSelectedSpeakerChanged(SonosDevice? value)
     {

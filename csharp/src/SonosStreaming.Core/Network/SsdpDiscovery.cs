@@ -81,6 +81,9 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
         return (ip4, port4);
     }
 
+    public static string FormatHost(IPAddress ip) =>
+        ip.AddressFamily == AddressFamily.InterNetworkV6 ? $"[{ip}]" : ip.ToString();
+
     public static (string FriendlyName, string Udn)? ParseDeviceDescription(string xml)
     {
         var name = ExtractElement(xml, "friendlyName");
@@ -99,6 +102,41 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
         int end = xml.IndexOf(close, start, StringComparison.OrdinalIgnoreCase);
         if (end < 0) return null;
         return xml[start..end].Trim();
+    }
+
+    public async Task<SonosDevice> LookupAsync(IPAddress ip, ushort port = 1400, CancellationToken ct = default)
+    {
+        var url = $"http://{FormatHost(ip)}:{port}/xml/device_description.xml";
+        var resp = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+        var desc = ParseDeviceDescription(resp);
+        if (desc == null)
+            throw new InvalidOperationException($"Device description from {ip}:{port} did not contain a Sonos friendlyName and UDN.");
+
+        return new SonosDevice(desc.Value.FriendlyName, ip, port, desc.Value.Udn);
+    }
+
+    public static List<SonosDevice> MergeDevices(IEnumerable<SonosDevice> primary, IEnumerable<SonosDevice> fallback)
+    {
+        var merged = new List<SonosDevice>();
+        foreach (var device in primary.Concat(fallback))
+        {
+            if (merged.Any(existing => IsSameDevice(existing, device)))
+                continue;
+
+            merged.Add(device);
+        }
+
+        return merged;
+    }
+
+    private static bool IsSameDevice(SonosDevice left, SonosDevice right)
+    {
+        if (!string.IsNullOrWhiteSpace(left.Udn) &&
+            !string.IsNullOrWhiteSpace(right.Udn) &&
+            string.Equals(left.Udn, right.Udn, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return left.Ip.Equals(right.Ip) && left.Port == right.Port;
     }
 
     public async Task<List<SonosDevice>> ScanAsync(int timeoutMs = 3000, CancellationToken ct = default)
@@ -245,5 +283,5 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
 
 public sealed record SonosDevice(string FriendlyName, IPAddress Ip, ushort Port, string Udn)
 {
-    public string AvTransportControlUrl => $"http://{Ip}:{Port}/MediaRenderer/AVTransport/Control";
+    public string AvTransportControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/AVTransport/Control";
 }
