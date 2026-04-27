@@ -11,6 +11,7 @@ public sealed class PipelineRunner : IDisposable
     private readonly AppCore _core;
     private readonly PipelineOptions _options;
     private readonly GainStage _gainStage;
+    private readonly BalanceStage _balanceStage;
     private readonly VolumeStage _volumeStage;
     private readonly BiquadEqualizer _equalizer;
     private readonly ChannelDelay _channelDelay;
@@ -34,6 +35,7 @@ public sealed class PipelineRunner : IDisposable
     private DateTime _lastFrameLog;
 
     public GainStage GainStage => _gainStage;
+    public BalanceStage BalanceStage => _balanceStage;
     public VolumeStage VolumeStage => _volumeStage;
     public BiquadEqualizer Equalizer => _equalizer;
     public ChannelDelay ChannelDelay => _channelDelay;
@@ -57,6 +59,7 @@ public sealed class PipelineRunner : IDisposable
         _core = core;
         _options = options ?? new PipelineOptions();
         _gainStage = new GainStage();
+        _balanceStage = new BalanceStage();
         _volumeStage = new VolumeStage();
         _equalizer = new BiquadEqualizer();
         _channelDelay = new ChannelDelay();
@@ -77,6 +80,11 @@ public sealed class PipelineRunner : IDisposable
         var selection = _core.Selection;
         if (selection.Source == AudioSourceSelection.Process && selection.ProcessSelection != null)
         {
+            Log.Information("Starting process loopback for pid={Pid} name={Name} on OS build {Build}",
+                selection.ProcessSelection.Pid, selection.ProcessSelection.Name, Environment.OSVersion.Version.Build);
+            if (!ProcessLoopbackSource.IsSupported(out var reason))
+                throw new InvalidOperationException(reason);
+
             var plb = new ProcessLoopbackSource(selection.ProcessSelection.Pid);
             plb.Start();
             _audioSource = plb;
@@ -137,7 +145,8 @@ public sealed class PipelineRunner : IDisposable
 
         var port = _streamServer.LocalEndPoint.Port;
         var streamUrl = _streamServer.StreamUrl($"{localIp}:{port}");
-        Log.Information("Instructing {Name} to stream from {Url}", device.FriendlyName, streamUrl);
+        Log.Information("Instructing {Name} to stream from {Url} format={Format} contentType={ContentType} radioScheme={RadioScheme}",
+            device.FriendlyName, streamUrl, Format, Format.ContentType(), Format != StreamingFormat.Lpcm);
 
         var sonos = new SonosController();
         await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: Format != StreamingFormat.Lpcm).ConfigureAwait(false);
@@ -244,6 +253,7 @@ public sealed class PipelineRunner : IDisposable
 
                 var samples = frame.Samples.AsSpan();
                 _gainStage.Apply(samples, frame.Channels);
+                _balanceStage.Apply(samples, frame.Channels);
                 _equalizer.Process(samples, frame.Channels);
                 _channelDelay.Process(samples, frame.Channels);
                 _volumeStage.Apply(samples);
@@ -262,8 +272,8 @@ public sealed class PipelineRunner : IDisposable
                 var now = DateTime.UtcNow;
                 if ((now - _lastFrameLog).TotalSeconds >= 3)
                 {
-                    Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}",
-                        _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds), _broadcast.SubscriberCount);
+                    Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}, droppedSubscribers={Dropped}",
+                        _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds), _broadcast.SubscriberCount, _broadcast.DroppedSubscribers);
                     _lastFrameLog = now;
                 }
             }

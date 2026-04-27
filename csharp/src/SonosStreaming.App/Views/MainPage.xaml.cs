@@ -35,4 +35,27 @@ public sealed partial class MainPage : Page
     {
         ViewModel.IsErrorVisible = false;
     }
+
+    private void OpenLogsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenLogsFolderCommand.Execute(null);
+    }
+
+    private async void CreateDiagnosticsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        await ViewModel.CreateDiagnosticsPackageCommand.ExecuteAsync(null);
+    }
+
+    private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "About RoomRelay",
+            Content = $"{ViewModel.AppVersionLabel}\n\nStreams Windows audio to Sonos speakers over your local network.",
+            CloseButtonText = "Close",
+            XamlRoot = XamlRoot,
+        };
+
+        await dialog.ShowAsync();
+    }
 }

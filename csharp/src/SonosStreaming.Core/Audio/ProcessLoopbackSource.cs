@@ -42,6 +42,25 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
 
     public new MixFormat MixFormat => _format;
 
+    public static bool IsSupported(out string reason)
+    {
+        var version = Environment.OSVersion.Version;
+        if (!OperatingSystem.IsWindows())
+        {
+            reason = "Per-application capture is only available on Windows.";
+            return false;
+        }
+
+        if (version.Major < 10 || version.Build < 19044)
+        {
+            reason = $"Per-application capture requires Windows 10 21H2/build 19044 or newer. This PC reports build {version.Build}.";
+            return false;
+        }
+
+        reason = "Per-application capture is available, but some protected, elevated, or short-lived app sessions may not be capturable.";
+        return true;
+    }
+
     public void Start()
     {
         var client = ActivateSync();
@@ -133,9 +152,13 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
             if (callHr < 0)
                 throw Marshal.GetExceptionForHR(callHr) ?? new Exception($"ActivateAudioInterfaceAsync failed: 0x{callHr:X8}");
 
-            done.Wait();
+            if (!done.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("Process loopback activation timed out after 10 seconds.");
             if (resultHr < 0)
+            {
+                Log.Warning("Process loopback activation failed for pid={Pid}: 0x{Hr:X8}", _pid, resultHr);
                 throw Marshal.GetExceptionForHR(resultHr) ?? new Exception($"Process loopback activation failed: 0x{resultHr:X8}");
+            }
             if (result == null)
                 throw new InvalidOperationException("Process loopback activation produced no IAudioClient");
 

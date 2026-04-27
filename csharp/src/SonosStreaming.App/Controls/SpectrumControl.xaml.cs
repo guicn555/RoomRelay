@@ -9,6 +9,7 @@ public sealed class SpectrumControl : UserControl
 {
     private readonly CanvasControl _canvas;
     private readonly DispatcherTimer _timer;
+    private float[] _displayLevels = Array.Empty<float>();
 
     public static readonly DependencyProperty LevelsProperty =
         DependencyProperty.Register(nameof(Levels), typeof(float[]), typeof(SpectrumControl), new PropertyMetadata(Array.Empty<float>(), OnLevelsChanged));
@@ -41,6 +42,9 @@ public sealed class SpectrumControl : UserControl
         var levels = Levels;
         if (levels == null || levels.Length == 0) return;
 
+        if (_displayLevels.Length != levels.Length)
+            _displayLevels = new float[levels.Length];
+
         float w = (float)sender.ActualWidth;
         float h = (float)sender.ActualHeight;
         int bands = levels.Length;
@@ -50,13 +54,16 @@ public sealed class SpectrumControl : UserControl
         using var ds = args.DrawingSession;
         for (int i = 0; i < bands; i++)
         {
-            float level = MathF.Min(1f, levels[i]);
+            var target = Math.Clamp(levels[i], 0f, 1f);
+            var smoothing = target > _displayLevels[i] ? 0.28f : 0.12f;
+            _displayLevels[i] += (target - _displayLevels[i]) * smoothing;
+            float level = Math.Clamp(_displayLevels[i], 0f, 1f);
             float barHeight = level * h;
             float x = i * (barWidth + gap);
             var color = level > 0.95f ? Microsoft.UI.Colors.OrangeRed
                       : level > 0.85f ? Microsoft.UI.Colors.Gold
                                       : Microsoft.UI.Colors.DodgerBlue;
-            ds.FillRectangle(x, h - barHeight, barWidth, barHeight, color);
+            ds.FillRoundedRectangle(x, h - barHeight, barWidth, barHeight, 2f, 2f, color);
         }
     }
 }

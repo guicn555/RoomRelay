@@ -22,8 +22,8 @@ Download the latest release:
 - [Portable/self-contained ZIP](https://github.com/guicn555/RoomRelay/releases/latest)
 - [Checksums](https://github.com/guicn555/RoomRelay/releases/latest)
 
-The release build is fully self-contained. It bundles the .NET runtime,
-Windows App Runtime, and app dependencies.
+The release build bundles the app and .NET runtime. It uses the installed
+Windows App Runtime framework package on Windows.
 
 ## Why RoomRelay?
 
@@ -37,6 +37,7 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
 | Stream What You Hear | Yes | No | Yes | Older DLNA-style app; targets .NET Framework |
 | TuneBlade | Yes | No | No | AirPlay-oriented; best with AirPlay-compatible Sonos models |
 | Airfoil | No current Windows app | No current Windows app | No | Current Sonos support is Mac-focused; Windows version was retired |
+| foobar2000 UPnP output | No | No | No | Useful for playing foobar/library audio to UPnP renderers; not live system/app audio |
 | Windows Media Player | No | No | No | Casts local library files, not live system/app audio |
 
 ## Features
@@ -58,6 +59,9 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
   or cloud streaming tool.
 - Like most network Sonos streaming approaches, it is not intended for
   low-latency gaming or video sync.
+- AAC is the recommended default and may have several seconds of Sonos buffering
+  latency. LPCM/WAV is lower latency but experimental, high-bandwidth, and more
+  sensitive to Wi-Fi or older Sonos hardware.
 - Per-application capture depends on Windows process-loopback support and is
   best on current Windows 11 builds.
 - The first run may require allowing the Windows Defender Firewall prompt on
@@ -72,15 +76,30 @@ Bug reports and feature requests are welcome in
 speaker compatibility reports, and setup notes belong in
 [GitHub Discussions](https://github.com/guicn555/RoomRelay/discussions).
 
+### Reporting issues
+
+RoomRelay can create a diagnostics package from the app. Use **Create package**
+in the Diagnostics section, or right-click the tray icon and choose **Create
+diagnostics package**. Attach that ZIP when reporting discovery, streaming, or
+per-application capture problems.
+
+The package includes RoomRelay logs, crash details if present, app/Windows
+version info, current source/format, discovered-speaker counts, and network
+adapter details. It may include local IP addresses, Sonos room names, device
+UDNs, and process names, so review it before posting publicly.
+
+Logs are stored in `%APPDATA%\RoomRelay`. The tray menu also has **Open logs
+folder** for manual access.
+
 ## Requirements
 
 | | Minimum | Recommended |
 |---|---|---|
 | **OS** | Windows 10 22H2 | Windows 11 23H2 or later |
 
-> **Zero dependencies.** The release build is fully self-contained: .NET 9
-> runtime, Windows App Runtime 1.8, and all libraries are bundled. Nothing
-> to install beforehand.
+> **Minimal dependencies.** Release artifacts include the .NET runtime and app
+> libraries. Windows 11 normally already includes the Windows App Runtime
+> framework package used by RoomRelay.
 
 ### Why Windows 11 is recommended
 
@@ -119,8 +138,8 @@ Install RoomRelay from the installer, or extract the ZIP and run
   interface — IPv4 (`239.255.255.250`) and IPv6 (`ff02::c`) — with
   concurrent per-socket receive loops. Resolves user-set zone names from
   `ZoneGroupTopology` so the UI shows "Living Room" instead of `RINCON_…`.
-- **Collapses stereo pairs** into a single zone by querying
-  `ZoneGroupTopology` and keeping only coordinators.
+- **Resolves Sonos topology** so stereo pairs, grouped rooms, and mixed S1/S2
+  households are shown as playable room/group targets.
 - **Pushes** the stream URL to the chosen speaker via UPnP SOAP
   (`SetAVTransportURI` with the `x-rincon-mp3radio://` prefix, then
   `Play`).
@@ -135,11 +154,17 @@ WinUI 3 window with Mica backdrop and declarative XAML UI:
 
 - Speaker list with Rescan and auto-select on launch (last speaker
   remembered by UDN).
+- Grouped rooms and stereo pairs are shown as one selectable Sonos playback
+  target because Sonos accepts playback commands on the group coordinator.
 - Source picker: **Whole system** or **Per application** (combo
   populates from active audio sessions, refreshed every 2 s).
 - Start / Stop with `ProgressRing` busy state and mutual disable.
-- Volume (0–8× with soft clip), per-channel L/R gain with Link, 3-band
-  EQ, per-channel delay — all in collapsible `Expander` sections.
+- Stream volume (0–8× with soft clip), balance, per-channel L/R gain with
+  Link, 3-band EQ, per-channel delay — all in collapsible `Expander`
+  sections. These are RoomRelay DSP controls; they do not change Sonos device
+  volume or tone.
+- Sonos device volume can be refreshed and applied separately through Sonos
+  `RenderingControl`.
 - Live VU meter and spectrum analyzer (Win2D, 30 fps).
 - `InfoBar` error notification when the pipeline crashes or the audio
   endpoint format changes.

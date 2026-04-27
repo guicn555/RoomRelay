@@ -5,10 +5,10 @@ This folder contains an [Inno Setup](https://jrsoftware.org/isinfo.php) script t
 ## Prerequisites
 
 1. Download and install **Inno Setup 6.2 or later**: https://jrsoftware.org/isdl.php
-2. Build the self-contained app:
+2. Publish the app:
    ```powershell
    cd ..\..\csharp
-   dotnet publish src\SonosStreaming.App -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o publish\RoomRelay-v1.0.2
+   dotnet publish src\SonosStreaming.App -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=false -o publish\RoomRelay-v1.0.2
    ```
 
 ## Build the Installer
@@ -39,6 +39,6 @@ RoomRelay-Setup-1.0.2.exe /VERYSILENT /NORESTART
 
 | Artifact | Approx. Size |
 |---|---|
-| Self-contained folder | ~220 MB |
-| ZIP | ~88 MB |
-| Installer (LZMA2 compressed) | ~80–85 MB |
+| Publish folder | varies |
+| ZIP | varies |
+| Installer (LZMA2 compressed) | varies |

@@ -145,12 +145,12 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
         var ifaces = CandidateInterfaces();
 
         if (ifaces.Count == 0)
-            ifaces.Add((IPAddress.Any, AddressFamily.InterNetwork));
+            ifaces.Add((IPAddress.Any, AddressFamily.InterNetwork, "Any"));
 
-        Log.Debug("SSDP scanning on interfaces: {Ifaces}", ifaces.Select(i => i.Ip));
+        Log.Debug("SSDP scanning on interfaces: {Ifaces}", ifaces.Select(i => $"{i.Name}={i.Ip}"));
 
         var sockets = new List<(UdpClient Client, AddressFamily Family)>();
-        foreach (var (ip, family) in ifaces)
+        foreach (var (ip, family, _) in ifaces)
         {
             try
             {
@@ -245,9 +245,9 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
         return devices;
     }
 
-    private static List<(IPAddress Ip, AddressFamily Family)> CandidateInterfaces()
+    private static List<(IPAddress Ip, AddressFamily Family, string Name)> CandidateInterfaces()
     {
-        var result = new List<(IPAddress, AddressFamily)>();
+        var result = new List<(IPAddress, AddressFamily, string)>();
         try
         {
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -264,12 +264,12 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
                         var bytes = addr.GetAddressBytes();
                         if (bytes[0] == 169 && bytes[1] == 254) continue; // link-local
                         if (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) continue;
-                        result.Add((addr, AddressFamily.InterNetwork));
+                        result.Add((addr, AddressFamily.InterNetwork, ni.Name));
                     }
                     else if (addr.AddressFamily == AddressFamily.InterNetworkV6)
                     {
                         if (addr.IsIPv6LinkLocal) continue;
-                        result.Add((addr, AddressFamily.InterNetworkV6));
+                        result.Add((addr, AddressFamily.InterNetworkV6, ni.Name));
                     }
                 }
             }
@@ -284,4 +284,5 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
 public sealed record SonosDevice(string FriendlyName, IPAddress Ip, ushort Port, string Udn)
 {
     public string AvTransportControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/AVTransport/Control";
+    public string RenderingControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/RenderingControl/Control";
 }

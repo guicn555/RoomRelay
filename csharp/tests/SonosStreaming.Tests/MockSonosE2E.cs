@@ -43,18 +43,24 @@ public class MockSonosE2E : IDisposable
     {
         using var ns = client.GetStream();
         using var reader = new StreamReader(ns, Encoding.UTF8, leaveOpen: true);
-        using var writer = new StreamWriter(ns, Encoding.UTF8, leaveOpen: true) { AutoFlush = true };
+        using var writer = new StreamWriter(ns, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
 
         var requestLine = await reader.ReadLineAsync();
         if (requestLine == null) return;
 
+        var headers = new List<string>();
         while (true)
         {
             var header = await reader.ReadLineAsync();
             if (header == null || header.Length == 0) break;
+            headers.Add(header);
         }
 
-        await writer.WriteAsync("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        var responseBody = headers.Any(h => h.Contains("GetVolume", StringComparison.OrdinalIgnoreCase))
+            ? "<?xml version=\"1.0\"?><s:Envelope><s:Body><u:GetVolumeResponse><CurrentVolume>37</CurrentVolume></u:GetVolumeResponse></s:Body></s:Envelope>"
+            : "";
+        var responseBodyBytes = Encoding.UTF8.GetByteCount(responseBody);
+        await writer.WriteAsync($"HTTP/1.1 200 OK\r\nContent-Length: {responseBodyBytes}\r\n\r\n{responseBody}");
         client.Close();
     }
 
@@ -70,6 +76,37 @@ public class MockSonosE2E : IDisposable
         setUriEnv.Should().Contain("<InstanceID>0</InstanceID>");
         playEnv.Should().Contain("<Speed>1</Speed>");
         stopEnv.Should().Contain("<u:Stop");
+    }
+
+    [Fact]
+    public void SonosController_LpcmSetUri_UsesPlainHttpUri()
+    {
+        var setUriEnv = SonosController.BuildSetUriEnvelope("http://192.168.1.10:8000/stream/test.wav", useRadioScheme: false);
+
+        setUriEnv.Should().Contain("<CurrentURI>http://192.168.1.10:8000/stream/test.wav</CurrentURI>");
+        setUriEnv.Should().NotContain("x-rincon-mp3radio://");
+    }
+
+    [Fact]
+    public void SonosController_RenderingControlVolumeEnvelopes_AreValid()
+    {
+        var get = SonosController.BuildGetVolumeEnvelope();
+        var set = SonosController.BuildSetVolumeEnvelope(125);
+
+        get.Should().Contain("<u:GetVolume");
+        get.Should().Contain("<Channel>Master</Channel>");
+        set.Should().Contain("<u:SetVolume");
+        set.Should().Contain("<DesiredVolume>100</DesiredVolume>");
+    }
+
+    [Fact]
+    public async Task SonosController_GetVolumeAsync_ReadsCurrentVolume()
+    {
+        var device = new SonosDevice("Test", IPAddress.Loopback, (ushort)_port, "uuid:TEST");
+
+        var volume = await new SonosController().GetVolumeAsync(device);
+
+        volume.Should().Be(37);
     }
 
     [Fact]

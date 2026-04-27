@@ -3,6 +3,7 @@ using System.Net;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
+using SonosStreaming.App.Services;
 using SonosStreaming.Core.Audio;
 using SonosStreaming.Core.Network;
 using SonosStreaming.Core.Pipeline;
@@ -14,6 +15,7 @@ namespace SonosStreaming.App.ViewModels;
 public sealed partial class MainViewModel : ObservableObject
 {
     private readonly AppCore _core;
+    private readonly DiagnosticsPackageService _diagnostics;
     public PipelineRunner Pipeline { get; }
     public AppSettings Settings { get; }
 
@@ -99,6 +101,21 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string ManualSpeakerStatus { get; set; }
 
+    [ObservableProperty]
+    public partial string DiagnosticsStatus { get; set; }
+
+    [ObservableProperty]
+    public partial double SonosVolume { get; set; }
+
+    [ObservableProperty]
+    public partial string SonosVolumeStatus { get; set; }
+
+    public string AppVersionLabel => $"RoomRelay {DiagnosticsPackageService.VersionLabel}";
+
+    public string SelectedSpeakerLabel => SelectedSpeaker?.FriendlyName
+        ?? _core.Selection.Speaker?.FriendlyName
+        ?? "No room selected";
+
     public StreamingFormat[] AvailableFormats { get; } = Enum.GetValues<StreamingFormat>();
     public string[] AvailableFormatNames { get; } = Enum.GetValues<StreamingFormat>().Select(f => f.DisplayName()).ToArray();
 
@@ -115,10 +132,14 @@ public sealed partial class MainViewModel : ObservableObject
     private DispatcherQueue? _dq;
     private Task? _processPollTask;
     private CancellationTokenSource? _processPollCts;
+    private CancellationTokenSource? _sonosVolumeDebounceCts;
+    private bool _allowSonosVolumeApply;
+    private bool _updatingSonosVolumeFromDevice;
 
-    public MainViewModel(AppCore core, PipelineRunner pipeline, AppSettings settings, ISsdpDiscovery discovery, ITopologyResolver topology)
+    public MainViewModel(AppCore core, PipelineRunner pipeline, AppSettings settings, ISsdpDiscovery discovery, ITopologyResolver topology, DiagnosticsPackageService diagnostics)
     {
         _core = core;
+        _diagnostics = diagnostics;
         Pipeline = pipeline;
         Settings = settings;
         _discovery = discovery;
@@ -142,12 +163,16 @@ public sealed partial class MainViewModel : ObservableObject
         ManualSpeakerIp = "";
         ManualSpeakerPort = "1400";
         ManualSpeakerStatus = "";
+        DiagnosticsStatus = "";
+        SonosVolume = 0;
+        SonosVolumeStatus = "";
         Pipeline.Format = settings.StreamingFormat;
 
         // Apply persisted settings to pipeline stages so restart restores the
         // user's last tuning without them having to touch any sliders.
         Pipeline.GainStage.GainL = settings.GainL;
         Pipeline.GainStage.GainR = settings.GainR;
+        Pipeline.BalanceStage.Balance = settings.Balance;
         Pipeline.VolumeStage.Volume = settings.Volume;
         Pipeline.Equalizer.LowGainDb = settings.EqLowDb;
         Pipeline.Equalizer.MidGainDb = settings.EqMidDb;
@@ -157,6 +182,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         Pipeline.PumpCrashed += OnPumpCrashed;
         Pipeline.FormatChanged += OnFormatChanged;
+        _allowSonosVolumeApply = true;
     }
 
     private async void OnFormatChanged(object? sender, EventArgs e)
@@ -179,6 +205,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnBalanceChanged(float value)
     {
+        Pipeline.BalanceStage.Balance = value;
         Settings.Balance = value;
         Settings.Save();
     }
@@ -257,6 +284,47 @@ public sealed partial class MainViewModel : ObservableObject
         AddManualSpeakerCommand.NotifyCanExecuteChanged();
     }
 
+    partial void OnSonosVolumeChanged(double value)
+    {
+        if (!_allowSonosVolumeApply || _updatingSonosVolumeFromDevice)
+            return;
+
+        var speaker = SelectedSpeaker ?? _core.Selection.Speaker;
+        if (speaker == null)
+            return;
+
+        _sonosVolumeDebounceCts?.Cancel();
+        _sonosVolumeDebounceCts?.Dispose();
+        _sonosVolumeDebounceCts = new CancellationTokenSource();
+        var token = _sonosVolumeDebounceCts.Token;
+        var volume = (int)Math.Round(Math.Clamp(value, 0, 100));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(350, token).ConfigureAwait(false);
+                await new SonosController().SetVolumeAsync(speaker, volume, token).ConfigureAwait(false);
+                SetSonosVolumeStatus($"Set Sonos volume to {volume}%");
+                Log.Information("Set Sonos volume for {Speaker} to {Volume}", speaker.FriendlyName, volume);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Failed to set Sonos volume");
+                SetSonosVolumeStatus("Could not set Sonos volume");
+            }
+        }, CancellationToken.None);
+    }
+
+    private void SetSonosVolumeStatus(string status)
+    {
+        if (_dq != null)
+            _dq.TryEnqueue(() => SonosVolumeStatus = status);
+        else
+            SonosVolumeStatus = status;
+    }
+
     partial void OnSelectedProcessChanged(AudioProcess? value)
     {
         if (value != null)
@@ -327,6 +395,7 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     public async Task RescanAsync()
     {
+        var previousUdn = SelectedSpeaker?.Udn ?? _core.Selection.Speaker?.Udn ?? Settings.LastSpeakerUdn;
         List<SonosDevice> raw = new();
         try
         {
@@ -340,15 +409,17 @@ public sealed partial class MainViewModel : ObservableObject
         var manual = await LookupSavedManualSpeakersAsync();
         var mergedRaw = SsdpDiscovery.MergeDevices(raw, manual);
         var resolved = await ResolveWithFallbackAsync(mergedRaw);
+        Log.Information("Discovery scan: raw={RawCount}, manual={ManualCount}, merged={MergedCount}, resolved={ResolvedCount}",
+            raw.Count, manual.Count, mergedRaw.Count, resolved.Count);
         SyncSpeakers(resolved);
         _core.SetDiscovered(resolved);
         Log.Information("Discovered {Count} speaker(s)", resolved.Count);
 
-        // Re-select the user's last speaker automatically if it's in range.
-        if (SelectedSpeaker == null && !string.IsNullOrEmpty(Settings.LastSpeakerUdn))
+        // Re-select by identity because the collection is rebuilt on every scan.
+        if (!string.IsNullOrEmpty(previousUdn))
         {
-            var match = resolved.FirstOrDefault(d => d.Udn == Settings.LastSpeakerUdn);
-            if (match != null) SelectSpeaker(match);
+            var match = resolved.FirstOrDefault(d => string.Equals(d.Udn, previousUdn, StringComparison.OrdinalIgnoreCase));
+            if (match != null) SelectedSpeaker = match;
         }
 
         try
@@ -544,6 +615,7 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnSelectedSpeakerChanged(SonosDevice? value)
     {
         StartCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SelectedSpeakerLabel));
         if (value != null)
         {
             try
@@ -553,6 +625,28 @@ public sealed partial class MainViewModel : ObservableObject
                 Settings.Save();
             }
             catch (Exception ex) { Log.Warning(ex, "Cannot select speaker"); }
+            _ = RefreshSonosVolumeAsync();
+        }
+    }
+
+    [RelayCommand]
+    public async Task RefreshSonosVolumeAsync()
+    {
+        var speaker = SelectedSpeaker ?? _core.Selection.Speaker;
+        if (speaker == null) return;
+
+        try
+        {
+            var volume = await new SonosController().GetVolumeAsync(speaker);
+            _updatingSonosVolumeFromDevice = true;
+            try { SonosVolume = volume; }
+            finally { _updatingSonosVolumeFromDevice = false; }
+            SonosVolumeStatus = $"Sonos volume: {volume}%";
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to read Sonos volume");
+            SonosVolumeStatus = "Could not read Sonos volume";
         }
     }
 
@@ -588,8 +682,43 @@ public sealed partial class MainViewModel : ObservableObject
             Log.Error(ex, "Start failed");
             try { await Pipeline.StopAsync(speaker); } catch { }
             try { _core.BeginStop(); _core.FinishStop(); } catch { }
+            ErrorMessage = ex.Message;
+            IsErrorVisible = true;
             StateLabel = "Idle";
+            OnPropertyChanged(nameof(SelectedSpeakerLabel));
         }
+    }
+
+    [RelayCommand]
+    public void OpenLogsFolder()
+    {
+        try { _diagnostics.OpenLogsFolder(); }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to open logs folder");
+            ErrorMessage = $"Could not open logs folder: {ex.Message}";
+            IsErrorVisible = true;
+        }
+    }
+
+    [RelayCommand]
+    public Task CreateDiagnosticsPackageAsync()
+    {
+        try
+        {
+            var package = _diagnostics.CreatePackage(_core, Pipeline, string.IsNullOrWhiteSpace(ErrorMessage) ? null : ErrorMessage);
+            DiagnosticsStatus = $"Diagnostics package created: {package}";
+            Log.Information("Diagnostics package created at {Path}", package);
+            _diagnostics.OpenDiagnosticsPackage(package);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to create diagnostics package");
+            ErrorMessage = $"Could not create diagnostics package: {ex.Message}";
+            IsErrorVisible = true;
+        }
+
+        return Task.CompletedTask;
     }
 
     [RelayCommand(CanExecute = nameof(CanStop))]
