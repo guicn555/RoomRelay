@@ -12,6 +12,7 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
     private static readonly IPAddress SsdpAddrV6 = IPAddress.Parse("ff02::c");
     private const int SsdpPort = 1900;
     private const string SonosSt = "urn:schemas-upnp-org:device:ZonePlayer:1";
+    private const string SonosUdnPrefix = "uuid:RINCON_";
 
     private readonly HttpClient _http;
     private readonly TimeSpan _httpTimeout = TimeSpan.FromSeconds(3);
@@ -111,6 +112,8 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
         var desc = ParseDeviceDescription(resp);
         if (desc == null)
             throw new InvalidOperationException($"Device description from {ip}:{port} did not contain a Sonos friendlyName and UDN.");
+        if (!desc.Value.Udn.StartsWith(SonosUdnPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Device at {ip}:{port} has UDN \"{desc.Value.Udn}\" which is not a Sonos speaker.");
 
         return new SonosDevice(desc.Value.FriendlyName, ip, port, desc.Value.Udn);
     }
@@ -231,15 +234,10 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
             {
                 var resp = await _http.GetStringAsync(loc, ct).ConfigureAwait(false);
                 var desc = ParseDeviceDescription(resp);
-                if (desc != null)
+                if (desc != null && desc.Value.Udn.StartsWith(SonosUdnPrefix, StringComparison.OrdinalIgnoreCase))
                     devices.Add(new SonosDevice(desc.Value.FriendlyName, ip, port, desc.Value.Udn));
-                else
-                    devices.Add(new SonosDevice($"Sonos @ {ip}", ip, port, $"uuid:unknown-{ip}"));
             }
-            catch
-            {
-                devices.Add(new SonosDevice($"Sonos @ {ip}", ip, port, $"uuid:unknown-{ip}"));
-            }
+            catch { }
         }
 
         return devices;

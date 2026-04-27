@@ -79,6 +79,23 @@ public class MockSonosE2E : IDisposable
     }
 
     [Fact]
+    public void BuildSetUriEnvelope_WithoutTitle_HasEmptyMetadata()
+    {
+        var env = SonosController.BuildSetUriEnvelope("192.168.1.10:8000/stream.aac");
+        env.Should().Contain("<CurrentURIMetaData></CurrentURIMetaData>");
+    }
+
+    [Fact]
+    public void BuildSetUriEnvelope_WithTitle_ContainsDidlLiteMetadata()
+    {
+        var env = SonosController.BuildSetUriEnvelope("192.168.1.10:8000/stream.aac", useRadioScheme: true, metadataTitle: "RoomRelay — Living Room");
+        env.Should().Contain("dc:title");
+        env.Should().Contain("RoomRelay — Living Room");
+        env.Should().Contain("audioBroadcast");
+        env.Should().Contain("DIDL-Lite");
+    }
+
+    [Fact]
     public void SonosController_LpcmSetUri_UsesPlainHttpUri()
     {
         var setUriEnv = SonosController.BuildSetUriEnvelope("http://192.168.1.10:8000/stream/test.wav", useRadioScheme: false);

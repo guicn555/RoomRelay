@@ -343,10 +343,50 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     flowing via SetAVTransportURI.
 
 30. **Sonos HTTP client timeout.** `SonosController` uses a 30 s
-    `HttpClient.Timeout` (was 10 s). For WAV streams Sonos may buffer
-    several seconds of PCM before responding to SOAP Play, so the
-    shorter timeout caused pipeline teardowns that killed working
-    streams.
+     `HttpClient.Timeout` (was 10 s). For WAV streams Sonos may buffer
+     several seconds of PCM before responding to SOAP Play, so the
+     shorter timeout caused pipeline teardowns that killed working
+     streams.
+
+31. **SSDP UDN filtering.** `SsdpDiscovery` rejects devices whose UDN
+    doesn't start with `uuid:RINCON_`. This prevents non-Sonos UPnP
+    devices (Hue bridges, etc.) from appearing in the speaker list.
+    `LookupAsync` (Add by IP) throws `InvalidOperationException` for
+    non-Sonos UDNs. The `ScanAsync` path silently skips them.
+
+32. **Per-application capture enumerates only user-facing processes.**
+    `EnumerateActiveAudioProcesses` filters out the RoomRelay process
+    itself, system services (`svchost`, `dllhost`, etc.), shell/terminal
+    windows, browsers (which fail loopback), and anything under
+    `C:\Windows`. Only processes with a visible window, a window title,
+    or a known media player name are shown. Expired sessions are
+    excluded; inactive sessions are included so users can
+    pre-select before playback starts.
+
+33. **Process loopback COM errors are user-friendly.** Both the
+    `InvalidCastException` (E_NOINTERFACE on `IAudioClient`) during
+    activation and during `Initialize` are caught and rethrown as
+    `InvalidOperationException` with guidance to switch to "Whole system"
+    mode. The pipeline wraps the error again with the app name and PID.
+
+34. **Spectrum analyzer runs before all DSP stages.** The visualizer
+    reflects the input signal before gain, EQ, and volume are applied,
+    so it shows a consistent view regardless of user slider positions.
+
+35. **Sonos track title via DIDL-Lite metadata.** `BuildSetUriEnvelope`
+    accepts an optional `metadataTitle`. When provided, the
+    `CurrentURIMetaData` element contains a DIDL-Lite document with
+    `dc:title` set to `"RoomRelay — {FriendlyName}"`, so Sonos
+    displays the room name instead of a random stream filename.
+
+36. **Speaker list is disabled during streaming.** The `ListView` is
+    bound to `IsNotStreaming` so accidental re-selection mid-stream
+    can't desync the UI from the core state. `OnSelectedSpeakerChanged`
+    reverts the selection if `SetSpeaker` throws.
+
+37. **MenuBar replaced with flyout button.** The top menu bar was
+    replaced by a subtle overflow button with a `MenuFlyout`,
+    matching the card-based UI. Commands bind directly to VM commands.
 
 ## Testing pattern
 

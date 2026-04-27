@@ -77,13 +77,23 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         };
 
         const long hnsBufferDuration = 2_000_000L;
-        client.Initialize(
-            AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-            hnsBufferDuration,
-            0,
-            &wfx,
-            null);
+        try
+        {
+            client.Initialize(
+                AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                hnsBufferDuration,
+                0,
+                &wfx,
+                null);
+        }
+        catch (InvalidCastException ice) when (ice.Message.Contains("IAudioClient"))
+        {
+            throw new InvalidOperationException(
+                $"This application (pid={_pid}) cannot be captured per-application. "
+                + "Browsers, system apps, and protected/elevated processes are not supported by Windows process loopback. "
+                + "Switch to 'Whole system' capture mode instead.", ice);
+        }
 
         BeginCapture(client, &wfx, $"ProcessLoopback-{_pid}");
         Log.Information("Process loopback capture started for pid={Pid} mode={Mode}", _pid, _mode);
@@ -124,12 +134,25 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                         int qi = Marshal.QueryInterface(pUnk, in iid, out var pAudioClient);
                         if (qi >= 0 && pAudioClient != IntPtr.Zero)
                         {
-                            result = (WinAudioClient)Marshal.GetObjectForIUnknown(pAudioClient);
+                            try
+                            {
+                                result = (WinAudioClient)Marshal.GetObjectForIUnknown(pAudioClient);
+                            }
+                            catch (InvalidCastException ice)
+                            {
+                                resultHr = unchecked((int)0x80004002); // E_NOINTERFACE
+                                Log.Warning(ice, "Process loopback cast to IAudioClient failed for pid={Pid}. " +
+                                    "The process ({Name}) may be a protected/system process. " +
+                                    "Try 'Whole system' mode instead.", _pid, _pid);
+                            }
                             Marshal.Release(pAudioClient);
                         }
                         else if (qi < 0)
                         {
                             resultHr = qi;
+                            Log.Warning("Process loopback QueryInterface failed for pid={Pid}: 0x{Hr:X8}. " +
+                                "The process may not have an active audio session, or it may be protected/elevated. " +
+                                "Try 'Whole system' mode instead.", _pid, qi);
                         }
                     }
                     finally { Marshal.Release(pUnk); }
@@ -156,8 +179,11 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                 throw new TimeoutException("Process loopback activation timed out after 10 seconds.");
             if (resultHr < 0)
             {
-                Log.Warning("Process loopback activation failed for pid={Pid}: 0x{Hr:X8}", _pid, resultHr);
-                throw Marshal.GetExceptionForHR(resultHr) ?? new Exception($"Process loopback activation failed: 0x{resultHr:X8}");
+                var msg = $"Process loopback activation failed for pid={_pid}: 0x{resultHr:X8}. "
+                    + "The application may not have an active audio session, or it may be protected/elevated. "
+                    + "Try 'Whole system' capture mode instead.";
+                Log.Warning(msg);
+                throw new InvalidOperationException(msg);
             }
             if (result == null)
                 throw new InvalidOperationException("Process loopback activation produced no IAudioClient");
@@ -250,6 +276,7 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                                             AudioSessionState state;
                                             session.GetState(&state);
                                             if (state == AudioSessionState.AudioSessionStateExpired) { expiredSkipped++; continue; }
+                                            if (pid == Environment.ProcessId) { continue; }
 
                                             string? sessionName = null;
                                             try
@@ -265,6 +292,11 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                                             catch { }
 
                                             var (processName, friendlyName) = GetProcessLabels(pid);
+                                            if (!IsUserFacingProcess(pid, processName))
+                                            {
+                                                systemPidSkipped++;
+                                                continue;
+                                            }
                                             string displayName = !string.IsNullOrEmpty(sessionName)
                                                 ? sessionName
                                                 : (friendlyName ?? processName ?? $"pid {pid}");
@@ -294,6 +326,63 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         Log.Debug("Audio sessions: {Endpoints} endpoints, {Total} total sessions, {SysSkip} system, {ExpSkip} expired, {Kept} kept",
             endpointsScanned, totalSessions, systemPidSkipped, expiredSkipped, deduped.Count);
         return deduped;
+    }
+
+    private static readonly string[] SystemProcessNames = new[]
+    {
+        // Windows core
+        "svchost", "csrss", "smss", "services", "lsass", "wininit", "winlogon",
+        "dwm", "fontdrvhost", "conhost", "sihost", "taskhostw", "backgroundtaskhost",
+        "runtimebroker", "dllhost", "wmiprvse", "searchindexer", "securityhealthservice",
+        "ctfmon", "spoolsv", "audiodg", "musnotify", "wlanext", "vpnclient",
+        "searchhost", "textinputhost", "shellexperiencehost", "startmenuexperiencehost",
+        // Terminals / shells
+        "windowsterminal", "wt", "cmd", "powershell", "pwsh",
+        // IDEs / dev tools
+        "devenv", "code",
+        // Other background
+        "onedrive", "teams", "outlook",
+        // Browsers (loopback fails on most)
+        "msedge", "chrome", "firefox", "opera", "brave", "vivaldi"
+    };
+
+    private static bool IsUserFacingProcess(int pid, string? processName)
+    {
+        if (string.IsNullOrEmpty(processName)) return false;
+        if (SystemProcessNames.Contains(processName, StringComparer.OrdinalIgnoreCase)) return false;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+
+            // If the executable lives under C:\Windows it's a system component.
+            try
+            {
+                var path = proc.MainModule?.FileName;
+                if (!string.IsNullOrEmpty(path))
+                {
+                    var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                    if (path.StartsWith(windows, StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+            }
+            catch { /* Access denied to MainModule for protected processes — fall through */ }
+
+            // A user-facing app typically has a visible main window.
+            if (proc.MainWindowHandle != IntPtr.Zero) return true;
+
+            // Some legitimate media apps hide their main window when minimized to tray.
+            if (!string.IsNullOrWhiteSpace(proc.MainWindowTitle)) return true;
+
+            var knownMediaPlayers = new[] { "spotify", "foobar2000", "musicbee", "aimp", "vlc", "winamp", "mediamonkey", "groove" };
+            if (knownMediaPlayers.Contains(processName, StringComparer.OrdinalIgnoreCase)) return true;
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static (string? processName, string? friendlyName) GetProcessLabels(int pid)

@@ -42,15 +42,22 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <MenuBar Grid.Row="0" Grid.ColumnSpan="3" Margin="0,0,0,10">
-            <MenuBarItem Title="File">
-                <MenuFlyoutItem Text="Open logs folder" Click="OpenLogsMenuItem_Click" />
-                <MenuFlyoutItem Text="Create diagnostics package" Click="CreateDiagnosticsMenuItem_Click" />
-            </MenuBarItem>
-            <MenuBarItem Title="Help">
-                <MenuFlyoutItem Text="About RoomRelay" Click="AboutMenuItem_Click" />
-            </MenuBarItem>
-        </MenuBar>
+        <Button Grid.Row="0" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Top"
+                Background="Transparent" BorderThickness="0"
+                ToolTipService.ToolTip="Tools"
+                Margin="0,-4,0,0">
+            <Button.Content>
+                <FontIcon Glyph="&#xE712;" FontSize="16" />
+            </Button.Content>
+            <Button.Flyout>
+                <MenuFlyout Placement="BottomEdgeAlignedRight">
+                    <MenuFlyoutItem Text="Open logs folder" Command="{x:Bind ViewModel.OpenLogsFolderCommand}" />
+                    <MenuFlyoutItem Text="Create diagnostics package" Command="{x:Bind ViewModel.CreateDiagnosticsPackageCommand}" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="About RoomRelay" Click="AboutMenuItem_Click" />
+                </MenuFlyout>
+            </Button.Flyout>
+        </Button>
 
         <!-- Left panel -->
         <ScrollViewer Grid.Row="1" Grid.Column="0" VerticalScrollMode="Auto">
@@ -74,6 +81,7 @@
                             DisplayMemberPath="FriendlyName"
                             MaxHeight="180"
                             SelectionMode="Single"
+                            IsEnabled="{x:Bind ViewModel.IsNotStreaming, Mode=OneWay}"
                             Background="{x:Null}"
                             BorderThickness="0" />
                         <TextBlock

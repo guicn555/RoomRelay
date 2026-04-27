@@ -36,16 +36,6 @@ public sealed partial class MainPage : Page
         ViewModel.IsErrorVisible = false;
     }
 
-    private void OpenLogsMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.OpenLogsFolderCommand.Execute(null);
-    }
-
-    private async void CreateDiagnosticsMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        await ViewModel.CreateDiagnosticsPackageCommand.ExecuteAsync(null);
-    }
-
     private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ContentDialog
