@@ -33,6 +33,7 @@ public sealed class AppSettings : IDisposable
     public float DelayMsR { get; set; } = 0.0f;
     public string? LastSpeakerUdn { get; set; }
     public StreamingFormat StreamingFormat { get; set; } = StreamingFormat.Aac256;
+    public List<ManualSpeakerEndpoint> ManualSpeakerEndpoints { get; set; } = new();
 
     public AppSettings()
     {
@@ -45,7 +46,9 @@ public sealed class AppSettings : IDisposable
         {
             if (!File.Exists(SettingsPath)) return new AppSettings();
             var json = File.ReadAllText(SettingsPath);
-            return JsonSerializer.Deserialize<AppSettings>(json, JsonOpts) ?? new AppSettings();
+            var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOpts) ?? new AppSettings();
+            settings.ManualSpeakerEndpoints ??= [];
+            return settings;
         }
         catch (Exception ex)
         {
@@ -88,4 +91,10 @@ public sealed class AppSettings : IDisposable
         _saveDebounceTimer.Dispose();
         FlushSave();
     }
+}
+
+public sealed record ManualSpeakerEndpoint
+{
+    public string Ip { get; init; } = "";
+    public ushort Port { get; init; } = 1400;
 }
