@@ -416,7 +416,7 @@ public sealed partial class MainViewModel : ObservableObject
         Log.Information("Discovered {Count} speaker(s)", resolved.Count);
 
         // Re-select by identity because the collection is rebuilt on every scan.
-        if (!string.IsNullOrEmpty(previousUdn))
+        if (!string.IsNullOrEmpty(previousUdn) && IsNotStreaming)
         {
             var match = resolved.FirstOrDefault(d => string.Equals(d.Udn, previousUdn, StringComparison.OrdinalIgnoreCase));
             if (match != null) SelectedSpeaker = match;
@@ -624,7 +624,12 @@ public sealed partial class MainViewModel : ObservableObject
                 Settings.LastSpeakerUdn = value.Udn;
                 Settings.Save();
             }
-            catch (Exception ex) { Log.Warning(ex, "Cannot select speaker"); }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "Cannot select speaker; reverting");
+                SelectedSpeaker = _core.Selection.Speaker;
+                return;
+            }
             _ = RefreshSonosVolumeAsync();
         }
     }

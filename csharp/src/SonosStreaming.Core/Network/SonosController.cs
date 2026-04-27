@@ -14,20 +14,35 @@ public sealed class SonosController : ISonosController
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
 
-    public static string BuildSetUriEnvelope(string streamUrl, bool useRadioScheme = true)
+    public static string BuildSetUriEnvelope(string streamUrl, bool useRadioScheme = true, string? metadataTitle = null)
     {
         var escaped = XmlEscape(streamUrl);
         // x-rincon-mp3radio:// forces Sonos into its MPEG radio decoder.
         // For LPCM (audio/L16) we send the plain http:// URI so Sonos
         // respects the Content-Type header and picks the PCM decoder.
         var currentUri = useRadioScheme ? $"x-rincon-mp3radio://{escaped}" : escaped;
+
+        var metadata = "";
+        if (!string.IsNullOrEmpty(metadataTitle))
+        {
+            var safeTitle = XmlEscape(metadataTitle);
+            var didl = $"<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
+                       $"xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
+                       $"xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
+                       $"<item id=\"-1\" parentID=\"-1\" restricted=\"true\">" +
+                       $"<dc:title>{safeTitle}</dc:title>" +
+                       $"<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>" +
+                       $"</item></DIDL-Lite>";
+            metadata = XmlEscape(didl);
+        }
+
         return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
                "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
                " <s:Body>\r\n" +
                $"  <u:SetAVTransportURI xmlns:u=\"{SoapNsAvTransport}\">\r\n" +
                "   <InstanceID>0</InstanceID>\r\n" +
                $"   <CurrentURI>{currentUri}</CurrentURI>\r\n" +
-               "   <CurrentURIMetaData></CurrentURIMetaData>\r\n" +
+               $"   <CurrentURIMetaData>{metadata}</CurrentURIMetaData>\r\n" +
                "  </u:SetAVTransportURI>\r\n" +
                " </s:Body>\r\n" +
                "</s:Envelope>";
@@ -99,7 +114,8 @@ public sealed class SonosController : ISonosController
     public async Task SetUriAndPlayAsync(SonosDevice device, string streamUrl, CancellationToken ct, bool useRadioScheme)
     {
         string uriArg = useRadioScheme ? StripScheme(streamUrl) : streamUrl;
-        await CallAsync(device.AvTransportControlUrl, "SetAVTransportURI", BuildSetUriEnvelope(uriArg, useRadioScheme), ct).ConfigureAwait(false);
+        var title = $"RoomRelay — {device.FriendlyName}";
+        await CallAsync(device.AvTransportControlUrl, "SetAVTransportURI", BuildSetUriEnvelope(uriArg, useRadioScheme, title), ct).ConfigureAwait(false);
 
         try
         {

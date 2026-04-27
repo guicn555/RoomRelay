@@ -85,9 +85,21 @@ public sealed class PipelineRunner : IDisposable
             if (!ProcessLoopbackSource.IsSupported(out var reason))
                 throw new InvalidOperationException(reason);
 
-            var plb = new ProcessLoopbackSource(selection.ProcessSelection.Pid);
-            plb.Start();
-            _audioSource = plb;
+            Log.Information("Creating process loopback source for pid={Pid} name={Name}",
+                selection.ProcessSelection.Pid, selection.ProcessSelection.Name);
+            try
+            {
+                var plb = new ProcessLoopbackSource(selection.ProcessSelection.Pid);
+                plb.Start();
+                _audioSource = plb;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException(
+                    $"Could not capture audio from \"{selection.ProcessSelection.Name}\" (pid={selection.ProcessSelection.Pid}). " +
+                    $"The application may not be playing audio yet, or it may be protected. " +
+                    $"Switch to 'Whole system' capture or try again after the app produces sound.", ex);
+            }
         }
         else
         {
@@ -252,13 +264,13 @@ public sealed class PipelineRunner : IDisposable
                     Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
 
                 var samples = frame.Samples.AsSpan();
+                _spectrumAnalyzer.Process(samples, frame.Channels);
                 _gainStage.Apply(samples, frame.Channels);
                 _balanceStage.Apply(samples, frame.Channels);
                 _equalizer.Process(samples, frame.Channels);
                 _channelDelay.Process(samples, frame.Channels);
                 _volumeStage.Apply(samples);
                 _vuMeter.Process(samples, frame.Channels);
-                _spectrumAnalyzer.Process(samples, frame.Channels);
 
                 var i16Frame = _resampler.Process(frame);
                 _encoder.Encode(i16Frame);

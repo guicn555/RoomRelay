@@ -87,6 +87,35 @@ public class SsdpParserTests
     }
 
     [Fact]
+    public async Task LookupAsync_RejectsNonSonosUdn()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
+        var serverTask = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            await using var stream = client.GetStream();
+            var buffer = new byte[2048];
+            _ = await stream.ReadAsync(buffer);
+
+            var xml = "<?xml version=\"1.0\"?><root><device><friendlyName>Hue Bridge</friendlyName><UDN>uuid:SomeOtherDevice-1234</UDN></device></root>";
+            var body = Encoding.UTF8.GetBytes(xml);
+            var header = Encoding.ASCII.GetBytes(
+                "HTTP/1.1 200 OK\r\n" +
+                $"Content-Length: {body.Length}\r\n" +
+                "Content-Type: text/xml\r\n\r\n");
+            await stream.WriteAsync(header);
+            await stream.WriteAsync(body);
+        });
+
+        using var discovery = new SsdpDiscovery();
+        var act = () => discovery.LookupAsync(IPAddress.Loopback, port);
+        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not a Sonos speaker*");
+        await serverTask;
+    }
+
+    [Fact]
     public void MergeDevices_DeduplicatesByUdnAndEndpoint()
     {
         var ssdp = new[]
@@ -112,5 +141,24 @@ public class SsdpParserTests
     {
         SsdpDiscovery.FormatHost(IPAddress.Parse("fe80::1")).Should().Be("[fe80::1]");
         SsdpDiscovery.FormatHost(IPAddress.Parse("192.168.1.42")).Should().Be("192.168.1.42");
+    }
+
+    [Fact]
+    public void NonSonosUdn_DoesNotStartWithRinconPrefix()
+    {
+        var xml = "<?xml version=\"1.0\"?><root><device><friendlyName>Hue Bridge</friendlyName><UDN>uuid:SomeOtherDevice-1234</UDN></device></root>";
+        var desc = SsdpDiscovery.ParseDeviceDescription(xml);
+        desc.Should().NotBeNull();
+        desc!.Value.Udn.Should().Be("uuid:SomeOtherDevice-1234");
+        desc.Value.Udn.StartsWith("uuid:RINCON_").Should().BeFalse();
+    }
+
+    [Fact]
+    public void SonosUdn_StartsWithRinconPrefix()
+    {
+        var xml = "<?xml version=\"1.0\"?><root><device><friendlyName>Kitchen</friendlyName><UDN>uuid:RINCON_AABBCCDDEEFF01400</UDN></device></root>";
+        var desc = SsdpDiscovery.ParseDeviceDescription(xml);
+        desc.Should().NotBeNull();
+        desc!.Value.Udn.Should().StartWith("uuid:RINCON_");
     }
 }
