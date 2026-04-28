@@ -120,4 +120,13 @@ public class TopologyResolverTests
     {
         TopologyResolver.StripUuidPrefix("RINCON_ABC").Should().Be("RINCON_ABC");
     }
+
+    [Fact]
+    public void BuildZoneGroupTopologyControlUrl_WithIPv6_BracketsHost()
+    {
+        var device = new SonosDevice("Office", IPAddress.Parse("fe80::1"), 1400, "uuid:RINCON_ABC");
+
+        TopologyResolver.BuildZoneGroupTopologyControlUrl(device)
+            .Should().Be("http://[fe80::1]:1400/ZoneGroupTopology/Control");
+    }
 }

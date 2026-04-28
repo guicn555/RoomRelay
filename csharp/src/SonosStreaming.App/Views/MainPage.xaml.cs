@@ -36,12 +36,32 @@ public sealed partial class MainPage : Page
         ViewModel.IsErrorVisible = false;
     }
 
+    private void QuitMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        App.Current.RequestQuit();
+    }
+
+    private void ThemeSystemMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ThemePreference = ThemePreference.System;
+    }
+
+    private void ThemeLightMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ThemePreference = ThemePreference.Light;
+    }
+
+    private void ThemeDarkMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ThemePreference = ThemePreference.Dark;
+    }
+
     private async void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new ContentDialog
         {
             Title = "About RoomRelay",
-            Content = $"{ViewModel.AppVersionLabel}\n\nStreams Windows audio to Sonos speakers over your local network.",
+            Content = $"{ViewModel.AppVersionLabel}\nby guicn555\n\nStreams Windows audio to Sonos speakers over your local network.",
             CloseButtonText = "Close",
             XamlRoot = XamlRoot,
         };

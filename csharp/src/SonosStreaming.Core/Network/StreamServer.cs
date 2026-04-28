@@ -90,7 +90,7 @@ public sealed class StreamServer : IStreamServer
                 tcp.NoDelay = true;
                 // LPCM (~1.5 Mbps) needs a much larger send buffer than AAC to avoid
                 // TCP backpressure causing audio dropouts.
-                tcp.SendBufferSize = _format == StreamingFormat.Lpcm ? 65536 : 8192;
+                tcp.SendBufferSize = _format.IsPcm() ? 65536 : 8192;
                 var clientTask = ServeClientAsync(tcp);
                 lock (_lock) { _connectionTasks.Add(clientTask); }
                 _ = clientTask.ContinueWith(_ =>
@@ -134,22 +134,34 @@ public sealed class StreamServer : IStreamServer
             }
             Log.Debug("Client {Peer} headers: {Headers}", peer, string.Join(" | ", requestHeaders));
 
-// ICY (Shoutcast) headers only make sense for compressed audio streams.
-// Sending them with audio/wav causes Sonos to enter ICY/MP3 decode mode
-// and fail immediately on the WAV header bytes.
-var icyHeaders = _format == StreamingFormat.Lpcm ? "" :
-    "icy-name: RoomRelay (Windows)\r\nicy-pub: 0\r\n";
-var headerStr = "HTTP/1.0 200 OK\r\n" +
-                          $"Content-Type: {_format.ContentType()}\r\n" +
-                          "Connection: close\r\n" +
-                          "Cache-Control: no-cache, no-store\r\n" +
-                          icyHeaders + "\r\n";
+            if (_format.IsPcm() && requestHeaders.Any(h => h.StartsWith("Range:", StringComparison.OrdinalIgnoreCase)))
+            {
+                // Sonos probes WAV/LPCM URLs with byte ranges as if they were seekable files.
+                // RoomRelay streams live audio only, so reject probes instead of creating a
+                // subscriber that will never consume the continuous stream correctly.
+                await WriteResponseAsync(ns, "HTTP/1.0 416 Range Not Satisfiable\r\nConnection: close\r\nAccept-Ranges: none\r\nContent-Range: bytes */*\r\n\r\n").ConfigureAwait(false);
+                Log.Information("Rejected PCM range request from {Peer}", peer);
+                return;
+            }
+
+            // ICY (Shoutcast) headers only make sense for compressed audio streams.
+            // Sending them with PCM causes Sonos to enter ICY/MP3 decode mode.
+            var icyHeaders = _format.IsPcm() ? "" :
+                "icy-name: RoomRelay (Windows)\r\nicy-pub: 0\r\n";
+            var pcmHeaders = _format.IsPcm() ? PcmStreamingHeaders(_format) : "";
+            var headerStr = "HTTP/1.0 200 OK\r\n" +
+                            $"Content-Type: {_format.ContentType()}\r\n" +
+                            "Connection: close\r\n" +
+                            "Cache-Control: no-cache, no-store\r\n" +
+                            "Accept-Ranges: none\r\n" +
+                            pcmHeaders +
+                            icyHeaders + "\r\n";
             var header = Encoding.ASCII.GetBytes(headerStr);
             await ns.WriteAsync(header, 0, header.Length, _cts.Token).ConfigureAwait(false);
 
             // Every LPCM connection gets its own WAV container header so
             // late-joining or reconnecting clients always start with valid RIFF/WAVE.
-            if (_format == StreamingFormat.Lpcm)
+            if (_format == StreamingFormat.WavPcm)
             {
                 await ns.WriteAsync(LpcmWavHeader, 0, LpcmWavHeader.Length, _cts.Token).ConfigureAwait(false);
             }
@@ -198,6 +210,13 @@ var headerStr = "HTTP/1.0 200 OK\r\n" +
     {
         var bytes = Encoding.ASCII.GetBytes(response);
         await ns.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+    }
+
+    private static string PcmStreamingHeaders(StreamingFormat format)
+    {
+        var profile = format == StreamingFormat.WavPcm ? "WAV" : "LPCM";
+        return "transferMode.dlna.org: Streaming\r\n" +
+               $"contentFeatures.dlna.org: DLNA.ORG_PN={profile};DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n";
     }
 
     public async Task ShutdownAsync()

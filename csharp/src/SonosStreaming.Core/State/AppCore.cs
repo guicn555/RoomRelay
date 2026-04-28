@@ -67,7 +67,15 @@ public sealed class AppCore
 
     public bool CanStart
     {
-        get { lock (_lock) return _state == AppState.Idle && _selection.Speaker != null; }
+        get
+        {
+            lock (_lock)
+            {
+                return _state == AppState.Idle &&
+                       _selection.Speaker != null &&
+                       (_selection.Source != AudioSourceSelection.Process || _selection.ProcessSelection != null);
+            }
+        }
     }
 
     public bool CanStop

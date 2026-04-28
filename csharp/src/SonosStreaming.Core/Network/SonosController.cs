@@ -14,7 +14,12 @@ public sealed class SonosController : ISonosController
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
 
-    public static string BuildSetUriEnvelope(string streamUrl, bool useRadioScheme = true, string? metadataTitle = null)
+    public static string BuildSetUriEnvelope(
+        string streamUrl,
+        bool useRadioScheme = true,
+        string? metadataTitle = null,
+        string? metadataResourceUrl = null,
+        string contentType = "audio/aac")
     {
         var escaped = XmlEscape(streamUrl);
         // x-rincon-mp3radio:// forces Sonos into its MPEG radio decoder.
@@ -26,13 +31,17 @@ public sealed class SonosController : ISonosController
         if (!string.IsNullOrEmpty(metadataTitle))
         {
             var safeTitle = XmlEscape(metadataTitle);
+            var safeResource = !string.IsNullOrWhiteSpace(metadataResourceUrl) ? XmlEscape(metadataResourceUrl) : null;
+            var safeProtocolInfo = XmlEscape($"http-get:*:{contentType}:*");
+            var res = safeResource == null ? "" : $"<res protocolInfo=\"{safeProtocolInfo}\">{safeResource}</res>";
             var didl = $"<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
-                       $"xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-                       $"xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
-                       $"<item id=\"-1\" parentID=\"-1\" restricted=\"true\">" +
-                       $"<dc:title>{safeTitle}</dc:title>" +
-                       $"<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>" +
-                       $"</item></DIDL-Lite>";
+                        $"xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
+                        $"xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
+                        $"<item id=\"-1\" parentID=\"-1\" restricted=\"true\">" +
+                        $"<dc:title>{safeTitle}</dc:title>" +
+                        $"<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>" +
+                        res +
+                        $"</item></DIDL-Lite>";
             metadata = XmlEscape(didl);
         }
 
@@ -112,10 +121,13 @@ public sealed class SonosController : ISonosController
         => SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: true);
 
     public async Task SetUriAndPlayAsync(SonosDevice device, string streamUrl, CancellationToken ct, bool useRadioScheme)
+        => await SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme, "audio/aac").ConfigureAwait(false);
+
+    public async Task SetUriAndPlayAsync(SonosDevice device, string streamUrl, CancellationToken ct, bool useRadioScheme, string contentType)
     {
         string uriArg = useRadioScheme ? StripScheme(streamUrl) : streamUrl;
         var title = $"RoomRelay — {device.FriendlyName}";
-        await CallAsync(device.AvTransportControlUrl, "SetAVTransportURI", BuildSetUriEnvelope(uriArg, useRadioScheme, title), ct).ConfigureAwait(false);
+        await CallAsync(device.AvTransportControlUrl, "SetAVTransportURI", BuildSetUriEnvelope(uriArg, useRadioScheme, title, streamUrl, contentType), ct).ConfigureAwait(false);
 
         try
         {

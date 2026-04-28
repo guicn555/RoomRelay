@@ -28,6 +28,28 @@ public class StateMachineTests
     }
 
     [Fact]
+    public void ProcessSourceWithoutProcess_CannotStart()
+    {
+        var core = new AppCore();
+        core.SetSpeaker(FakeSpeaker());
+        core.SetSource(AudioSourceSelection.Process);
+
+        core.CanStart.Should().BeFalse();
+        var act = () => core.BeginStart();
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void ProcessSourceWithProcess_CanStart()
+    {
+        var core = new AppCore();
+        core.SetSpeaker(FakeSpeaker());
+        core.SetSource(AudioSourceSelection.Process, new AudioSourceProcessSelection { Pid = 1234, Name = "player.exe" });
+
+        core.CanStart.Should().BeTrue();
+    }
+
+    [Fact]
     public void FullStartStopCycle()
     {
         var core = new AppCore();

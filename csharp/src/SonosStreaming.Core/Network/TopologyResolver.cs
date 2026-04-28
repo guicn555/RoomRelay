@@ -150,6 +150,9 @@ public sealed class TopologyResolver : ITopologyResolver
         return result;
     }
 
+    public static string BuildZoneGroupTopologyControlUrl(SonosDevice device) =>
+        $"http://{SsdpDiscovery.FormatHost(device.Ip)}:{device.Port}/ZoneGroupTopology/Control";
+
     public async Task<List<SonosDevice>> ResolveCoordinatorsAsync(List<SonosDevice> devices, CancellationToken ct = default)
     {
         if (devices.Count == 0) return devices;
@@ -287,7 +290,7 @@ public sealed class TopologyResolver : ITopologyResolver
 
     private async Task<string> FetchZoneGroupStateAsync(SonosDevice device, CancellationToken ct)
     {
-        var url = $"http://{device.Ip}:{device.Port}/ZoneGroupTopology/Control";
+        var url = BuildZoneGroupTopologyControlUrl(device);
         var soapAction = $"\"{SoapNsZgt}#GetZoneGroupState\"";
         var body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
                    "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +

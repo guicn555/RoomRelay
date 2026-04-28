@@ -74,6 +74,21 @@ public sealed partial class App : Application
         vm.StartAudioProcessPolling();
     }
 
+    public void RequestQuit()
+    {
+        var window = MainWindow;
+        if (window == null) return;
+
+        window.DispatcherQueue.TryEnqueue(async () =>
+        {
+            try { await Services.GetRequiredService<MainViewModel>().StopCommand.ExecuteAsync(null); } catch { }
+            if (MainWindow is MainWindow mainWindow)
+                mainWindow.MarkExiting();
+            try { Services.GetRequiredService<TrayIconHost>().Dispose(); } catch { }
+            Exit();
+        });
+    }
+
     private static void StartSecondInstanceListener(Window window)
     {
         var showWindow = Program.ShowWindowEvent;
