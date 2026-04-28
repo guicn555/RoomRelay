@@ -20,6 +20,7 @@ public sealed partial class MainViewModel : ObservableObject
     public AppSettings Settings { get; }
 
     public ObservableCollection<SonosDevice> Speakers { get; } = new();
+    public ObservableCollection<ManualSpeakerEndpoint> SavedManualSpeakerEndpoints { get; } = new();
 
     [ObservableProperty]
     public partial SonosDevice? SelectedSpeaker { get; set; }
@@ -35,6 +36,15 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial int ClientCount { get; set; }
 
+    public string ClientStatusLabel => StateLabel == "Streaming"
+        ? ClientCount switch
+        {
+            0 => "Waiting for speaker...",
+            1 => "1 Sonos client connected",
+            _ => $"{ClientCount} Sonos clients connected",
+        } + (SelectedSpeaker != null ? $" ({SelectedSpeaker.Ip})" : "")
+        : "No Sonos client connected";
+
     [ObservableProperty]
     public partial float VuL { get; set; }
 
@@ -43,6 +53,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     public partial float[] Spectrum { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsClipping { get; set; }
+
+    public string ClippingStatusLabel => IsClipping
+        ? "Clipping detected. Lower the source app volume, stream volume, or gain."
+        : "";
 
     [ObservableProperty]
     public partial float Volume { get; set; }
@@ -102,6 +119,12 @@ public sealed partial class MainViewModel : ObservableObject
     public partial string ManualSpeakerStatus { get; set; }
 
     [ObservableProperty]
+    public partial ManualSpeakerEndpoint? SelectedManualSpeakerEndpoint { get; set; }
+
+    [ObservableProperty]
+    public partial string DiscoveryStatus { get; set; }
+
+    [ObservableProperty]
     public partial string DiagnosticsStatus { get; set; }
 
     [ObservableProperty]
@@ -110,14 +133,32 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string SonosVolumeStatus { get; set; }
 
+    [ObservableProperty]
+    public partial ThemePreference ThemePreference { get; set; }
+
+    public event EventHandler? ThemePreferenceChanged;
+
+    public string SourceStatusLabel
+    {
+        get
+        {
+            if (IsProcessSourceSelected && SelectedProcess == null)
+                return "Select an application before starting per-application capture.";
+            return "";
+        }
+    }
+
     public string AppVersionLabel => $"RoomRelay {DiagnosticsPackageService.VersionLabel}";
 
-    public string SelectedSpeakerLabel => SelectedSpeaker?.FriendlyName
-        ?? _core.Selection.Speaker?.FriendlyName
-        ?? "No room selected";
+    public string SelectedSpeakerLabel => SelectedSpeaker?.FriendlyName ?? "No room selected";
 
-    public StreamingFormat[] AvailableFormats { get; } = Enum.GetValues<StreamingFormat>();
-    public string[] AvailableFormatNames { get; } = Enum.GetValues<StreamingFormat>().Select(f => f.DisplayName()).ToArray();
+    [ObservableProperty]
+    public partial string PlaybackTargetLabel { get; set; }
+
+    private static readonly StreamingFormat[] _visibleFormats = Enum.GetValues<StreamingFormat>()
+        .Where(f => f != StreamingFormat.L16Pcm).ToArray();
+    public StreamingFormat[] AvailableFormats { get; } = _visibleFormats;
+    public string[] AvailableFormatNames { get; } = _visibleFormats.Select(f => f.DisplayName()).ToArray();
 
     public int SelectedFormatIndex
     {
@@ -135,6 +176,7 @@ public sealed partial class MainViewModel : ObservableObject
     private CancellationTokenSource? _sonosVolumeDebounceCts;
     private bool _allowSonosVolumeApply;
     private bool _updatingSonosVolumeFromDevice;
+    private long _sonosVolumeUserVersion;
 
     public MainViewModel(AppCore core, PipelineRunner pipeline, AppSettings settings, ISsdpDiscovery discovery, ITopologyResolver topology, DiagnosticsPackageService diagnostics)
     {
@@ -163,10 +205,14 @@ public sealed partial class MainViewModel : ObservableObject
         ManualSpeakerIp = "";
         ManualSpeakerPort = "1400";
         ManualSpeakerStatus = "";
+        DiscoveryStatus = "";
         DiagnosticsStatus = "";
         SonosVolume = 0;
-        SonosVolumeStatus = "";
+        SonosVolumeStatus = "Select a room to read or set Sonos volume.";
+        PlaybackTargetLabel = "No room selected";
+        ThemePreference = settings.ThemePreference;
         Pipeline.Format = settings.StreamingFormat;
+        SyncSavedManualEndpoints();
 
         // Apply persisted settings to pipeline stages so restart restores the
         // user's last tuning without them having to touch any sliders.
@@ -193,7 +239,17 @@ public sealed partial class MainViewModel : ObservableObject
         try { _core.BeginStop(); _core.FinishStop(); } catch { }
         ErrorMessage = "Audio format changed. Please restart the stream.";
         IsErrorVisible = true;
-        StateLabel = "Error: format changed";
+        StateLabel = "Idle";
+    }
+
+    partial void OnClientCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(ClientStatusLabel));
+    }
+
+    partial void OnIsClippingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ClippingStatusLabel));
     }
 
     partial void OnVolumeChanged(float value)
@@ -272,6 +328,13 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedFormatIndex));
     }
 
+    partial void OnThemePreferenceChanged(ThemePreference value)
+    {
+        Settings.ThemePreference = value;
+        Settings.Save();
+        ThemePreferenceChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     partial void OnManualSpeakerIpChanged(string value)
     {
         ManualSpeakerStatus = "";
@@ -282,6 +345,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         ManualSpeakerStatus = "";
         AddManualSpeakerCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedManualSpeakerEndpointChanged(ManualSpeakerEndpoint? value)
+    {
+        RemoveManualSpeakerCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSonosVolumeChanged(double value)
@@ -298,6 +366,8 @@ public sealed partial class MainViewModel : ObservableObject
         _sonosVolumeDebounceCts = new CancellationTokenSource();
         var token = _sonosVolumeDebounceCts.Token;
         var volume = (int)Math.Round(Math.Clamp(value, 0, 100));
+        var version = Interlocked.Increment(ref _sonosVolumeUserVersion);
+        SetSonosVolumeStatus($"Setting Sonos volume to {volume}%...");
 
         _ = Task.Run(async () =>
         {
@@ -305,7 +375,8 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 await Task.Delay(350, token).ConfigureAwait(false);
                 await new SonosController().SetVolumeAsync(speaker, volume, token).ConfigureAwait(false);
-                SetSonosVolumeStatus($"Set Sonos volume to {volume}%");
+                if (version == Interlocked.Read(ref _sonosVolumeUserVersion))
+                    SetSonosVolumeStatus($"Set Sonos volume to {volume}%");
                 Log.Information("Set Sonos volume for {Speaker} to {Volume}", speaker.FriendlyName, volume);
             }
             catch (OperationCanceledException) { }
@@ -327,6 +398,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnSelectedProcessChanged(AudioProcess? value)
     {
+        StartCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SourceStatusLabel));
         if (value != null)
         {
             try { _core.SetSource(AudioSourceSelection.Process, new AudioSourceProcessSelection { Pid = value.Pid, Name = value.DisplayName }); }
@@ -342,7 +415,13 @@ public sealed partial class MainViewModel : ObservableObject
         try { _core.BeginStop(); _core.FinishStop(); } catch { }
         ErrorMessage = ex.Message;
         IsErrorVisible = true;
-        StateLabel = $"Error: {ex.Message}";
+        StateLabel = "Idle";
+    }
+
+    partial void OnIsProcessSourceSelectedChanged(bool value)
+    {
+        StartCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SourceStatusLabel));
     }
 
     // Starts a background task that refreshes the AudioProcesses collection
@@ -400,10 +479,14 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             raw = await _discovery.ScanAsync(3000);
+            DiscoveryStatus = raw.Count == 0
+                ? "No Sonos rooms found. Check that this PC and Sonos are on the same network, allow the firewall prompt, or add a room by IP."
+                : $"Found {raw.Count} Sonos device{(raw.Count == 1 ? "" : "s")}. Resolving rooms...";
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "SSDP scan failed");
+            DiscoveryStatus = "Discovery failed. Check network access or add a room by IP.";
         }
 
         var manual = await LookupSavedManualSpeakersAsync();
@@ -414,13 +497,31 @@ public sealed partial class MainViewModel : ObservableObject
         SyncSpeakers(resolved);
         _core.SetDiscovered(resolved);
         Log.Information("Discovered {Count} speaker(s)", resolved.Count);
+        DiscoveryStatus = resolved.Count == 0
+            ? "No rooms available. Check that Sonos is powered on and reachable, then Rescan or Add by IP."
+            : $"Found {resolved.Count} room{(resolved.Count == 1 ? "" : "s")}.";
 
         // Re-select by identity because the collection is rebuilt on every scan.
+        var selected = false;
+        if (!string.IsNullOrEmpty(previousUdn) && !IsNotStreaming)
+        {
+            var match = resolved.FirstOrDefault(d => string.Equals(d.Udn, previousUdn, StringComparison.OrdinalIgnoreCase));
+            if (match != null)
+                PlaybackTargetLabel = match.FriendlyName;
+        }
+
         if (!string.IsNullOrEmpty(previousUdn) && IsNotStreaming)
         {
             var match = resolved.FirstOrDefault(d => string.Equals(d.Udn, previousUdn, StringComparison.OrdinalIgnoreCase));
-            if (match != null) SelectedSpeaker = match;
+            if (match != null)
+            {
+                SelectedSpeaker = match;
+                selected = true;
+            }
         }
+
+        if (!selected && IsNotStreaming)
+            SelectedSpeaker = resolved.Count == 1 ? resolved[0] : null;
 
         try
         {
@@ -435,6 +536,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public bool CanAddManualSpeaker => StateLabel == "Idle";
+    public bool CanRemoveManualSpeaker => StateLabel == "Idle" && SelectedManualSpeakerEndpoint != null;
 
     [RelayCommand(CanExecute = nameof(CanAddManualSpeaker))]
     public async Task AddManualSpeakerAsync()
@@ -455,6 +557,7 @@ public sealed partial class MainViewModel : ObservableObject
             _core.SetDiscovered(merged);
 
             AddSavedManualEndpoint(ip, port);
+            SyncSavedManualEndpoints();
 
             var selected = FindMatchingSpeaker(resolved.First(), merged) ?? resolved.First();
             SelectSpeaker(selected);
@@ -468,6 +571,25 @@ public sealed partial class MainViewModel : ObservableObject
             Log.Warning(ex, "Manual speaker lookup failed for {Ip}:{Port}", ip, port);
             ManualSpeakerStatus = $"Could not reach {ip}:{port}";
         }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveManualSpeaker))]
+    public async Task RemoveManualSpeakerAsync()
+    {
+        var endpoint = SelectedManualSpeakerEndpoint;
+        if (endpoint == null) return;
+
+        var removed = Settings.ManualSpeakerEndpoints.RemoveAll(e =>
+            e.Port == endpoint.Port &&
+            string.Equals(e.Ip, endpoint.Ip, StringComparison.OrdinalIgnoreCase));
+
+        if (removed == 0)
+            return;
+
+        Settings.Save();
+        ManualSpeakerStatus = $"Removed {endpoint.DisplayName}";
+        SyncSavedManualEndpoints();
+        await RescanAsync();
     }
 
     [RelayCommand]
@@ -486,7 +608,14 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     public void SelectSource(AudioSourceSelection selection)
     {
-        try { _core.SetSource(selection); }
+        IsProcessSourceSelected = selection == AudioSourceSelection.Process;
+        try
+        {
+            var process = selection == AudioSourceSelection.Process && SelectedProcess != null
+                ? new AudioSourceProcessSelection { Pid = SelectedProcess.Pid, Name = SelectedProcess.DisplayName }
+                : null;
+            _core.SetSource(selection, process);
+        }
         catch (Exception ex) { Log.Warning(ex, "Cannot change source"); }
     }
 
@@ -497,7 +626,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex) { Log.Warning(ex, "Cannot select process"); }
     }
 
-    public bool CanStart => StateLabel == "Idle" && SelectedSpeaker != null;
+    public bool CanStart => StateLabel == "Idle" && SelectedSpeaker != null && (!IsProcessSourceSelected || SelectedProcess != null);
     public bool CanStop => StateLabel == "Streaming";
 
     [ObservableProperty]
@@ -508,8 +637,11 @@ public sealed partial class MainViewModel : ObservableObject
         StartCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
         AddManualSpeakerCommand.NotifyCanExecuteChanged();
+        RemoveManualSpeakerCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsNotStreaming));
         OnPropertyChanged(nameof(CanAddManualSpeaker));
+        OnPropertyChanged(nameof(CanRemoveManualSpeaker));
+        OnPropertyChanged(nameof(ClientStatusLabel));
         StatusBrush = value switch
         {
             "Streaming" => new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LimeGreen),
@@ -607,6 +739,19 @@ public sealed partial class MainViewModel : ObservableObject
         Settings.Save();
     }
 
+    private void SyncSavedManualEndpoints()
+    {
+        var previous = SelectedManualSpeakerEndpoint;
+        SavedManualSpeakerEndpoints.Clear();
+        foreach (var endpoint in Settings.ManualSpeakerEndpoints)
+            SavedManualSpeakerEndpoints.Add(endpoint);
+
+        SelectedManualSpeakerEndpoint = previous == null
+            ? null
+            : SavedManualSpeakerEndpoints.FirstOrDefault(e => e.Port == previous.Port && string.Equals(e.Ip, previous.Ip, StringComparison.OrdinalIgnoreCase));
+        RemoveManualSpeakerCommand.NotifyCanExecuteChanged();
+    }
+
     private static SonosDevice? FindMatchingSpeaker(SonosDevice device, IEnumerable<SonosDevice> candidates) =>
         candidates.FirstOrDefault(candidate =>
             string.Equals(candidate.Udn, device.Udn, StringComparison.OrdinalIgnoreCase) ||
@@ -616,6 +761,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         StartCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SelectedSpeakerLabel));
+        if (StateLabel != "Streaming")
+            PlaybackTargetLabel = value?.FriendlyName ?? "No room selected";
         if (value != null)
         {
             try
@@ -632,6 +779,10 @@ public sealed partial class MainViewModel : ObservableObject
             }
             _ = RefreshSonosVolumeAsync();
         }
+        else
+        {
+            SonosVolumeStatus = "Select a room to read or set Sonos volume.";
+        }
     }
 
     [RelayCommand]
@@ -642,7 +793,11 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
+            var versionAtRefreshStart = Interlocked.Read(ref _sonosVolumeUserVersion);
             var volume = await new SonosController().GetVolumeAsync(speaker);
+            if (versionAtRefreshStart != Interlocked.Read(ref _sonosVolumeUserVersion))
+                return;
+
             _updatingSonosVolumeFromDevice = true;
             try { SonosVolume = volume; }
             finally { _updatingSonosVolumeFromDevice = false; }
@@ -658,8 +813,15 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStart))]
     public async Task StartAsync()
     {
-        var speaker = _core.Selection.Speaker;
+        var speaker = SelectedSpeaker;
         if (speaker == null) return;
+        if (IsProcessSourceSelected && SelectedProcess == null)
+        {
+            ErrorMessage = "Select an application before starting per-application capture.";
+            IsErrorVisible = true;
+            StartCommand.NotifyCanExecuteChanged();
+            return;
+        }
 
         try
         {
@@ -678,6 +840,7 @@ public sealed partial class MainViewModel : ObservableObject
             await Pipeline.StartAsync(speaker, CancellationToken.None);
             _core.FinishStart();
             StateLabel = "Streaming";
+            PlaybackTargetLabel = speaker.FriendlyName;
 
             if (Pipeline.CurrentMixFormat is MixFormat fmt)
                 InputFormatLabel = $"{fmt.SampleRate} Hz · {fmt.Channels} ch · {fmt.BitsPerSample}-bit {(fmt.IsFloat ? "float" : "int")}";
@@ -737,6 +900,7 @@ public sealed partial class MainViewModel : ObservableObject
             await Pipeline.StopAsync(speaker);
             _core.FinishStop();
             StateLabel = "Idle";
+            PlaybackTargetLabel = SelectedSpeaker?.FriendlyName ?? "No room selected";
             InputFormatLabel = "—";
             ClientCount = 0;
         }

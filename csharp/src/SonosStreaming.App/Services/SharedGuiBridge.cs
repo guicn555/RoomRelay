@@ -43,6 +43,7 @@ public sealed class SharedGuiBridge : IDisposable
             var vuL = _pipeline.VuMeter.RmsL;
             var vuR = _pipeline.VuMeter.RmsR;
             var clients = _pipeline.ClientCount;
+            var clipping = _pipeline.IsClipping;
             var spectrum = _pipeline.SpectrumAnalyzer.BandLevels.ToArray();
 
             _dq.TryEnqueue(() =>
@@ -50,6 +51,7 @@ public sealed class SharedGuiBridge : IDisposable
                 _vm.VuL = vuL;
                 _vm.VuR = vuR;
                 _vm.ClientCount = clients;
+                _vm.IsClipping = clipping;
                 _vm.Spectrum = spectrum;
             });
         }

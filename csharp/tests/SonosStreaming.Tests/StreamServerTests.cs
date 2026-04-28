@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using SonosStreaming.Core.Audio;
 using SonosStreaming.Core.Network;
 using FluentAssertions;
@@ -26,6 +28,23 @@ public class StreamServerTests
     }
 
     [Fact]
+    public void StreamUrl_WithIPv6HostOverride_FormatsCorrectly()
+    {
+        var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
+        var server = new StreamServer(broadcast, 0);
+        server.Start();
+        try
+        {
+            var url = server.StreamUrl("[fe80::1]:8000");
+            url.Should().MatchRegex(@"^http://\[fe80::1\]:8000/stream/[0-9a-f]{16}\.aac$");
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    [Fact]
     public void StreamUrl_WithoutOverride_UsesLocalEndPoint()
     {
         var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
@@ -45,15 +64,32 @@ public class StreamServerTests
     }
 
     [Fact]
-    public void StreamUrl_LpcmFormat_UsesWavExtension()
+    public void StreamUrl_WavPcmFormat_UsesWavExtension()
     {
         var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
-        var server = new StreamServer(broadcast, 0, StreamingFormat.Lpcm);
+        var server = new StreamServer(broadcast, 0, StreamingFormat.WavPcm);
         server.Start();
         try
         {
             var url = server.StreamUrl("192.168.1.10:8000");
             url.Should().MatchRegex(@"^http://192\.168\.1\.10:8000/stream/[0-9a-f]{16}\.wav$");
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    [Fact]
+    public void StreamUrl_L16PcmFormat_UsesL16Extension()
+    {
+        var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
+        var server = new StreamServer(broadcast, 0, StreamingFormat.L16Pcm);
+        server.Start();
+        try
+        {
+            var url = server.StreamUrl("192.168.1.10:8000");
+            url.Should().MatchRegex(@"^http://192\.168\.1\.10:8000/stream/[0-9a-f]{16}\.l16$");
         }
         finally
         {
@@ -89,6 +125,33 @@ public class StreamServerTests
         {
             server.LocalEndPoint.Address.Should().Be(bindAddress);
             server.LocalEndPoint.Port.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task PcmRangeRequest_ReturnsRangeNotSatisfiable()
+    {
+        var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
+        var server = new StreamServer(broadcast, 0, StreamingFormat.WavPcm, IPAddress.Loopback);
+        server.Start();
+        try
+        {
+            using var client = new TcpClient();
+            await client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint.Port);
+            await using var stream = client.GetStream();
+            var request = Encoding.ASCII.GetBytes($"GET {server.StreamPath} HTTP/1.0\r\nHost: localhost\r\nRange: bytes=1024-\r\n\r\n");
+            await stream.WriteAsync(request);
+
+            var buffer = new byte[512];
+            var read = await stream.ReadAsync(buffer);
+            var response = Encoding.ASCII.GetString(buffer, 0, read);
+
+            response.Should().StartWith("HTTP/1.0 416 Range Not Satisfiable");
+            response.Should().Contain("Accept-Ranges: none");
         }
         finally
         {

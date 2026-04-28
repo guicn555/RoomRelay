@@ -88,20 +88,37 @@ public class MockSonosE2E : IDisposable
     [Fact]
     public void BuildSetUriEnvelope_WithTitle_ContainsDidlLiteMetadata()
     {
-        var env = SonosController.BuildSetUriEnvelope("192.168.1.10:8000/stream.aac", useRadioScheme: true, metadataTitle: "RoomRelay — Living Room");
+        var env = SonosController.BuildSetUriEnvelope("192.168.1.10:8000/stream.aac", useRadioScheme: true, metadataTitle: "RoomRelay — Living Room", metadataResourceUrl: "http://192.168.1.10:8000/stream.aac", contentType: "audio/aac");
         env.Should().Contain("dc:title");
         env.Should().Contain("RoomRelay — Living Room");
         env.Should().Contain("audioBroadcast");
         env.Should().Contain("DIDL-Lite");
+        env.Should().Contain("res protocolInfo");
+        env.Should().Contain("http-get:*:audio/aac:*");
     }
 
     [Fact]
-    public void SonosController_LpcmSetUri_UsesPlainHttpUri()
+    public void SonosController_PcmSetUri_UsesPlainHttpUri()
     {
         var setUriEnv = SonosController.BuildSetUriEnvelope("http://192.168.1.10:8000/stream/test.wav", useRadioScheme: false);
 
         setUriEnv.Should().Contain("<CurrentURI>http://192.168.1.10:8000/stream/test.wav</CurrentURI>");
         setUriEnv.Should().NotContain("x-rincon-mp3radio://");
+    }
+
+    [Fact]
+    public void BuildSetUriEnvelope_L16Metadata_UsesL16ProtocolInfo()
+    {
+        var env = SonosController.BuildSetUriEnvelope(
+            "http://192.168.1.10:8000/stream/test.l16",
+            useRadioScheme: false,
+            metadataTitle: "RoomRelay — Living Room",
+            metadataResourceUrl: "http://192.168.1.10:8000/stream/test.l16",
+            contentType: "audio/L16");
+
+        env.Should().Contain("RoomRelay — Living Room");
+        env.Should().Contain("http-get:*:audio/L16:*");
+        env.Should().Contain("http://192.168.1.10:8000/stream/test.l16");
     }
 
     [Fact]

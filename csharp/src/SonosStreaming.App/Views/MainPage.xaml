@@ -29,7 +29,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid Padding="16">
+    <Grid Padding="12">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="380" />
             <ColumnDefinition Width="12" />
@@ -37,39 +37,68 @@
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="0" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="12" />
+            <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Button Grid.Row="0" Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Top"
-                Background="Transparent" BorderThickness="0"
-                ToolTipService.ToolTip="Tools"
-                Margin="0,-4,0,0">
-            <Button.Content>
-                <FontIcon Glyph="&#xE712;" FontSize="16" />
-            </Button.Content>
-            <Button.Flyout>
-                <MenuFlyout Placement="BottomEdgeAlignedRight">
-                    <MenuFlyoutItem Text="Open logs folder" Command="{x:Bind ViewModel.OpenLogsFolderCommand}" />
-                    <MenuFlyoutItem Text="Create diagnostics package" Command="{x:Bind ViewModel.CreateDiagnosticsPackageCommand}" />
-                    <MenuFlyoutSeparator />
-                    <MenuFlyoutItem Text="About RoomRelay" Click="AboutMenuItem_Click" />
-                </MenuFlyout>
-            </Button.Flyout>
-        </Button>
+        <!-- Header -->
+        <Border Grid.Row="0" Grid.ColumnSpan="3"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,10">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="2">
+                    <TextBlock Text="RoomRelay" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBlock Text="Stream Windows audio to Sonos speakers on your local network." Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Button Command="{x:Bind ViewModel.OpenLogsFolderCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE838;" FontSize="14" />
+                            <TextBlock Text="Logs" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{x:Bind ViewModel.CreateDiagnosticsPackageCommand}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE9D9;" FontSize="14" />
+                            <TextBlock Text="Diagnostics" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE713;" FontSize="14" />
+                            <TextBlock Text="Settings" VerticalAlignment="Center" />
+                            <FontIcon Glyph="&#xE70D;" FontSize="10" />
+                        </StackPanel>
+                        <Button.Flyout>
+                            <MenuFlyout Placement="BottomEdgeAlignedRight">
+                                <MenuFlyoutSubItem Text="Theme">
+                                    <MenuFlyoutItem Text="System" Click="ThemeSystemMenuItem_Click" />
+                                    <MenuFlyoutItem Text="Light" Click="ThemeLightMenuItem_Click" />
+                                    <MenuFlyoutItem Text="Dark" Click="ThemeDarkMenuItem_Click" />
+                                </MenuFlyoutSubItem>
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="About RoomRelay" Click="AboutMenuItem_Click" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Quit RoomRelay" Click="QuitMenuItem_Click" />
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <!-- Left panel -->
-        <ScrollViewer Grid.Row="1" Grid.Column="0" VerticalScrollMode="Auto">
+        <ScrollViewer Grid.Row="2" Grid.Column="0" VerticalScrollMode="Auto">
             <StackPanel Spacing="16">
-
-                <InfoBar
-                    Title="Stream Error"
-                    Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
-                    IsOpen="{x:Bind ViewModel.IsErrorVisible, Mode=OneWay}"
-                    Severity="Error"
-                    IsClosable="True"
-                    CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
 
                 <!-- Speakers -->
                 <Border Style="{StaticResource CardBorderStyle}">
@@ -88,6 +117,10 @@
                             Text="Grouped rooms and stereo pairs are shown as one Sonos playback target."
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextWrapping="Wrap" />
+                        <TextBlock
+                            Text="{x:Bind ViewModel.DiscoveryStatus, Mode=OneWay}"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
                         <Button HorizontalAlignment="Stretch" Command="{x:Bind ViewModel.RescanCommand}">
                             <Grid HorizontalAlignment="Center">
                                 <StackPanel x:Name="RescanIdle" Orientation="Horizontal" Spacing="6"
@@ -104,6 +137,18 @@
                         </Button>
                     </StackPanel>
                 </Border>
+
+                <InfoBar
+                    Title="Stream Error"
+                    Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+                    IsOpen="{x:Bind ViewModel.IsErrorVisible, Mode=OneWay}"
+                    Severity="Error"
+                    IsClosable="True"
+                    CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
+                <TextBlock
+                    Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextWrapping="Wrap" />
 
                 <!-- Manual speaker -->
                 <Border Style="{StaticResource CardBorderStyle}">
@@ -148,6 +193,21 @@
                             Text="{x:Bind ViewModel.ManualSpeakerStatus, Mode=OneWay}"
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextWrapping="Wrap" />
+                        <TextBlock Text="Saved manual IPs" Margin="0,8,0,0" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox
+                                ItemsSource="{x:Bind ViewModel.SavedManualSpeakerEndpoints, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedManualSpeakerEndpoint, Mode=TwoWay}"
+                                DisplayMemberPath="DisplayName"
+                                PlaceholderText="No saved manual IPs"
+                                IsEnabled="{x:Bind ViewModel.CanAddManualSpeaker, Mode=OneWay}"
+                                HorizontalAlignment="Stretch" />
+                            <Button Grid.Column="1" Content="Remove" Command="{x:Bind ViewModel.RemoveManualSpeakerCommand}" />
+                        </Grid>
                     </StackPanel>
                 </Border>
 
@@ -166,6 +226,7 @@
                             IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}"
                             MaxHeight="200"
                             HorizontalAlignment="Stretch" />
+                        <TextBlock Text="{x:Bind ViewModel.SourceStatusLabel, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="Format" Margin="0,8,0,0" />
                         <TextBlock Text="AAC is the stable default with Sonos buffering latency. LPCM is lower-latency, high-bandwidth, and experimental." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <ComboBox
@@ -214,7 +275,7 @@
         </ScrollViewer>
 
         <!-- Right panel -->
-        <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
+        <ScrollViewer Grid.Row="2" Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
             <StackPanel Spacing="16">
 
                 <!-- Levels -->
@@ -222,7 +283,10 @@
                     <Expander.Header>
                         <TextBlock Text="Levels" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
                     </Expander.Header>
-                    <controls:VuMeterControl Height="36" ValueL="{x:Bind ViewModel.VuL, Mode=OneWay}" ValueR="{x:Bind ViewModel.VuR, Mode=OneWay}" />
+                    <StackPanel Spacing="6">
+                        <controls:VuMeterControl Height="36" ValueL="{x:Bind ViewModel.VuL, Mode=OneWay}" ValueR="{x:Bind ViewModel.VuR, Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind ViewModel.ClippingStatusLabel, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                    </StackPanel>
                 </Expander>
 
                 <!-- Volume & Balance -->
@@ -292,7 +356,7 @@
                 <!-- Spectrum -->
                 <Expander IsExpanded="True" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
                     <Expander.Header>
-                        <TextBlock Text="Spectrum" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
+                        <TextBlock Text="Input spectrum" Style="{StaticResource SectionHeaderStyle}" Margin="0" />
                     </Expander.Header>
                     <controls:SpectrumControl Height="80" HorizontalAlignment="Stretch" Levels="{x:Bind ViewModel.Spectrum, Mode=OneWay}" />
                 </Expander>
@@ -301,21 +365,23 @@
         </ScrollViewer>
 
         <!-- Status bar -->
-        <Border Grid.Row="3" Grid.ColumnSpan="3"
+        <Border Grid.Row="4" Grid.ColumnSpan="3"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
-                Padding="16,10">
+                Padding="12,8">
             <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
                 <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
                 <TextBlock Text="{x:Bind ViewModel.StateLabel, Mode=OneWay}" VerticalAlignment="Center" />
                 <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.SelectedSpeakerLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.PlaybackTargetLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                 <TextBlock Text="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
                 <TextBlock Text="{x:Bind ViewModel.EncoderLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+                <TextBlock Text="{x:Bind ViewModel.ClientStatusLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
         </Border>
     </Grid>

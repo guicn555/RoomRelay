@@ -54,24 +54,11 @@ public sealed class TrayIconHost : IDisposable
                 new PopupMenuItem("Open logs folder", (_, _) => vm.OpenLogsFolderCommand.Execute(null)),
                 new PopupMenuItem("Create diagnostics package", (_, _) => _ = vm.CreateDiagnosticsPackageCommand.ExecuteAsync(null)),
                 new PopupMenuSeparator(),
-                new PopupMenuItem("Quit", (_, _) => QuitApp(vm)),
+                new PopupMenuItem("Quit", (_, _) => App.Current.RequestQuit()),
             },
         };
 
         _icon.ForceCreate();
-    }
-
-    private void QuitApp(MainViewModel vm)
-    {
-        if (_window is not MainWindow mw) return;
-        mw.DispatcherQueue.TryEnqueue(async () =>
-        {
-            try { await vm.StopCommand.ExecuteAsync(null); } catch { }
-            mw.MarkExiting();
-            _icon?.Dispose();
-            _icon = null;
-            Application.Current.Exit();
-        });
     }
 
     private void ShowPopupMenu()

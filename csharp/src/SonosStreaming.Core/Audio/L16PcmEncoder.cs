@@ -1,30 +1,31 @@
 namespace SonosStreaming.Core.Audio;
 
-// Raw little-endian 16-bit interleaved PCM batcher for Sonos lossless streaming.
-// The WAV container header is injected per-connection by StreamServer so every
-// late-joining client gets a valid RIFF/WAVE header (data chunk size = 0xFFFFFFFF).
-public sealed class LpcmEncoder : IAudioEncoder
+// Raw 16-bit network-order PCM batcher for Sonos low-latency streaming.
+// audio/L16 uses big-endian samples and carries rate/channel information in
+// the Content-Type header, so no WAV container header is emitted.
+public sealed class L16PcmEncoder : IAudioEncoder
 {
-    private byte[] _batchBuffer = new byte[65536];
+    private byte[] _batchBuffer = new byte[32768];
     private int _batchOffset;
     private bool _disposed;
 
-    public LpcmEncoder()
-    {
-    }
-
     public void Encode(PcmFrameI16 pcmFrame)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(LpcmEncoder));
+        if (_disposed) throw new ObjectDisposedException(nameof(L16PcmEncoder));
         var samples = pcmFrame.Samples;
         int byteCount = samples.Length * 2;
         EnsureCapacity(byteCount);
-        Buffer.BlockCopy(samples, 0, _batchBuffer, _batchOffset, byteCount);
-        _batchOffset += byteCount;
+
+        for (int i = 0; i < samples.Length; i++)
+        {
+            ushort sample = unchecked((ushort)samples[i]);
+            _batchBuffer[_batchOffset++] = (byte)(sample >> 8);
+            _batchBuffer[_batchOffset++] = (byte)(sample & 0xFF);
+        }
     }
 
-    // ~43 ms of 48 kHz stereo 16-bit PCM. Lower cadence is more useful for
-    // video while still avoiding tiny TCP writes.
+    // ~43 ms of 48 kHz stereo 16-bit PCM. Keep this lower than WAV's previous
+    // 85 ms cadence to reduce latency for video use.
     private const int MinFlushBytes = 8192;
 
     public ReadOnlyMemory<byte> FlushChunk()
@@ -43,7 +44,7 @@ public sealed class LpcmEncoder : IAudioEncoder
     {
         if (_batchOffset == 0) return ReadOnlyMemory<byte>.Empty;
         var chunk = new ReadOnlyMemory<byte>(_batchBuffer, 0, _batchOffset);
-        _batchBuffer = new byte[65536];
+        _batchBuffer = new byte[32768];
         _batchOffset = 0;
         return chunk;
     }

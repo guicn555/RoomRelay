@@ -33,6 +33,7 @@ public sealed class AppSettings : IDisposable
     public float DelayMsR { get; set; } = 0.0f;
     public string? LastSpeakerUdn { get; set; }
     public StreamingFormat StreamingFormat { get; set; } = StreamingFormat.Aac256;
+    public ThemePreference ThemePreference { get; set; } = ThemePreference.System;
     public List<ManualSpeakerEndpoint> ManualSpeakerEndpoints { get; set; } = new();
 
     public AppSettings()
@@ -93,8 +94,16 @@ public sealed class AppSettings : IDisposable
     }
 }
 
+public enum ThemePreference
+{
+    System,
+    Light,
+    Dark,
+}
+
 public sealed record ManualSpeakerEndpoint
 {
     public string Ip { get; init; } = "";
     public ushort Port { get; init; } = 1400;
+    public string DisplayName => $"{Ip}:{Port}";
 }

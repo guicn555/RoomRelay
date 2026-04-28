@@ -34,6 +34,7 @@
 
   <ItemGroup>
     <Content Include="Assets\sonos-streaming.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\roomrelay-mark.png" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

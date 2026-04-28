@@ -12,7 +12,22 @@ public class SsdpIpv6Tests
     {
         var msg = SsdpDiscovery.BuildMSearch(IPAddress.Parse("ff02::c"), "urn:schemas-upnp-org:device:ZonePlayer:1", 2);
         var text = System.Text.Encoding.ASCII.GetString(msg);
-        text.Should().Contain("HOST: ff02::c:1900");
+        text.Should().Contain("HOST: [ff02::c]:1900");
+    }
+
+    [Fact]
+    public void FormatHost_WithIPv6_BracketsAddress()
+    {
+        SsdpDiscovery.FormatHost(IPAddress.Parse("fe80::1")).Should().Be("[fe80::1]");
+    }
+
+    [Fact]
+    public void SonosDeviceUrls_WithIPv6_AreBracketed()
+    {
+        var device = new SonosDevice("Office", IPAddress.Parse("fe80::1"), 1400, "uuid:RINCON_FAKE");
+
+        device.AvTransportControlUrl.Should().Be("http://[fe80::1]:1400/MediaRenderer/AVTransport/Control");
+        device.RenderingControlUrl.Should().Be("http://[fe80::1]:1400/MediaRenderer/RenderingControl/Control");
     }
 
     [Fact]

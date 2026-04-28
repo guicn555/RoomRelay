@@ -106,11 +106,24 @@ public class AppSettingsTests : IDisposable
     [Fact]
     public void Save_ThenLoad_RoundtripsStreamingFormat()
     {
-        var original = new AppSettings { StreamingFormat = StreamingFormat.Lpcm };
+        var original = new AppSettings { StreamingFormat = StreamingFormat.WavPcm };
         original.Save();
         Thread.Sleep(700);
         var loaded = AppSettings.Load();
-        loaded.StreamingFormat.Should().Be(StreamingFormat.Lpcm);
+        loaded.StreamingFormat.Should().Be(StreamingFormat.WavPcm);
+        original.Dispose();
+    }
+
+    [Fact]
+    public void Save_ThenLoad_RoundtripsThemePreference()
+    {
+        var original = new AppSettings { ThemePreference = ThemePreference.Dark };
+        original.Save();
+        Thread.Sleep(700);
+
+        var loaded = AppSettings.Load();
+
+        loaded.ThemePreference.Should().Be(ThemePreference.Dark);
         original.Dispose();
     }
 }

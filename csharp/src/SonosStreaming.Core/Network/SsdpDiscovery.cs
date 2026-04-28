@@ -26,7 +26,7 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
     {
         return Encoding.ASCII.GetBytes(
             $"M-SEARCH * HTTP/1.1\r\n" +
-            $"HOST: {multicastAddr}:{SsdpPort}\r\n" +
+            $"HOST: {FormatHost(multicastAddr)}:{SsdpPort}\r\n" +
             $"MAN: \"ssdp:discover\"\r\n" +
             $"MX: {mx}\r\n" +
             $"ST: {st}\r\n\r\n");
@@ -261,12 +261,10 @@ public sealed class SsdpDiscovery : ISsdpDiscovery
                     {
                         var bytes = addr.GetAddressBytes();
                         if (bytes[0] == 169 && bytes[1] == 254) continue; // link-local
-                        if (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) continue;
                         result.Add((addr, AddressFamily.InterNetwork, ni.Name));
                     }
                     else if (addr.AddressFamily == AddressFamily.InterNetworkV6)
                     {
-                        if (addr.IsIPv6LinkLocal) continue;
                         result.Add((addr, AddressFamily.InterNetworkV6, ni.Name));
                     }
                 }

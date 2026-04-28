@@ -33,6 +33,7 @@ public sealed class PipelineRunner : IDisposable
     private long _framesEmitted;
     private DateTime _pipelineStart;
     private DateTime _lastFrameLog;
+    private int _clippingHold;
 
     public GainStage GainStage => _gainStage;
     public BalanceStage BalanceStage => _balanceStage;
@@ -43,6 +44,7 @@ public sealed class PipelineRunner : IDisposable
     public SpectrumAnalyzer SpectrumAnalyzer => _spectrumAnalyzer;
     public BroadcastChannel<ReadOnlyMemory<byte>> Broadcast => _broadcast;
     public MixFormat? CurrentMixFormat { get; private set; }
+    public bool IsClipping { get; private set; }
 
     /// <summary>
     /// Raised when the pump loop terminates with an unhandled exception.
@@ -73,11 +75,14 @@ public sealed class PipelineRunner : IDisposable
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var token = _cts.Token;
 
+        var selection = _core.Selection;
+        if (selection.Source == AudioSourceSelection.Process && selection.ProcessSelection == null)
+            throw new InvalidOperationException("Select an application before starting per-application capture.");
+
         var localIp = LocalIpResolver.PickLocalIpFor(device.Ip);
         _streamServer = new StreamServer(_broadcast, _options.HttpPort, Format, localIp);
         _streamServer.Start();
 
-        var selection = _core.Selection;
         if (selection.Source == AudioSourceSelection.Process && selection.ProcessSelection != null)
         {
             Log.Information("Starting process loopback for pid={Pid} name={Name} on OS build {Build}",
@@ -156,12 +161,12 @@ public sealed class PipelineRunner : IDisposable
         }
 
         var port = _streamServer.LocalEndPoint.Port;
-        var streamUrl = _streamServer.StreamUrl($"{localIp}:{port}");
+        var streamUrl = _streamServer.StreamUrl($"{SsdpDiscovery.FormatHost(localIp)}:{port}");
         Log.Information("Instructing {Name} to stream from {Url} format={Format} contentType={ContentType} radioScheme={RadioScheme}",
-            device.FriendlyName, streamUrl, Format, Format.ContentType(), Format != StreamingFormat.Lpcm);
+            device.FriendlyName, streamUrl, Format, Format.ContentType(), !Format.IsPcm());
 
         var sonos = new SonosController();
-        await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: Format != StreamingFormat.Lpcm).ConfigureAwait(false);
+        await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: !Format.IsPcm(), contentType: Format.MetadataMimeType()).ConfigureAwait(false);
     }
 
     public async Task StopAsync(SonosDevice? device)
@@ -237,7 +242,8 @@ public sealed class PipelineRunner : IDisposable
                 StreamingFormat.Aac192 => new MfAacEncoder(192_000),
                 StreamingFormat.Aac256 => new MfAacEncoder(256_000),
                 StreamingFormat.Aac320 => new MfAacEncoder(320_000),
-                StreamingFormat.Lpcm   => (IAudioEncoder)new LpcmEncoder(),
+                StreamingFormat.WavPcm => (IAudioEncoder)new LpcmEncoder(),
+                StreamingFormat.L16Pcm => new L16PcmEncoder(),
                 _                      => new MfAacEncoder(256_000),
             };
 
@@ -270,6 +276,7 @@ public sealed class PipelineRunner : IDisposable
                 _equalizer.Process(samples, frame.Channels);
                 _channelDelay.Process(samples, frame.Channels);
                 _volumeStage.Apply(samples);
+                UpdateClipping(samples);
                 _vuMeter.Process(samples, frame.Channels);
 
                 var i16Frame = _resampler.Process(frame);
@@ -317,6 +324,26 @@ public sealed class PipelineRunner : IDisposable
     }
 
     public int ClientCount { get; private set; }
+
+    private void UpdateClipping(ReadOnlySpan<float> samples)
+    {
+        var clipped = false;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            if (MathF.Abs(samples[i]) >= 0.999f)
+            {
+                clipped = true;
+                break;
+            }
+        }
+
+        if (clipped)
+            _clippingHold = 30;
+        else if (_clippingHold > 0)
+            _clippingHold--;
+
+        IsClipping = _clippingHold > 0;
+    }
 
     public void Dispose()
     {
