@@ -6,8 +6,14 @@ namespace SonosStreaming.Core.Audio;
 public sealed class L16PcmEncoder : IAudioEncoder
 {
     private byte[] _batchBuffer = new byte[32768];
+    private readonly int _minFlushBytes;
     private int _batchOffset;
     private bool _disposed;
+
+    public L16PcmEncoder(int minFlushBytes = 8192)
+    {
+        _minFlushBytes = minFlushBytes;
+    }
 
     public void Encode(PcmFrameI16 pcmFrame)
     {
@@ -24,13 +30,9 @@ public sealed class L16PcmEncoder : IAudioEncoder
         }
     }
 
-    // ~43 ms of 48 kHz stereo 16-bit PCM. Keep this lower than WAV's previous
-    // 85 ms cadence to reduce latency for video use.
-    private const int MinFlushBytes = 8192;
-
     public ReadOnlyMemory<byte> FlushChunk()
     {
-        if (_batchOffset < MinFlushBytes) return ReadOnlyMemory<byte>.Empty;
+        if (_batchOffset < _minFlushBytes) return ReadOnlyMemory<byte>.Empty;
         return DoFlush();
     }
 

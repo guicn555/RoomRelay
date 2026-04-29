@@ -33,6 +33,17 @@ public sealed class L16PcmEncoderTests
     }
 
     [Fact]
+    public void Encode_LowLatencyThreshold_FlushesEarlier()
+    {
+        using var enc = new L16PcmEncoder(minFlushBytes: 4096);
+
+        for (int i = 0; i < 5; i++)
+            enc.Encode(MakeFrame(new short[480]));
+
+        enc.FlushChunk().Length.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
     public void Dispose_ThenEncode_ThrowsObjectDisposedException()
     {
         var enc = new L16PcmEncoder();

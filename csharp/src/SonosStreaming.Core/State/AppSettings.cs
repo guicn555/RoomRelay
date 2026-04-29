@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Serilog;
 using SonosStreaming.Core.Audio;
+using SonosStreaming.Core.Pipeline;
 
 namespace SonosStreaming.Core.State;
 
@@ -33,6 +34,9 @@ public sealed class AppSettings : IDisposable
     public float DelayMsR { get; set; } = 0.0f;
     public string? LastSpeakerUdn { get; set; }
     public StreamingFormat StreamingFormat { get; set; } = StreamingFormat.Aac256;
+    public StreamingLatencyMode LatencyMode { get; set; } = StreamingLatencyMode.Stable;
+    public string? LastProcessName { get; set; }
+    public List<AppProcessPreference> ProcessPreferences { get; set; } = new();
     public ThemePreference ThemePreference { get; set; } = ThemePreference.System;
     public List<ManualSpeakerEndpoint> ManualSpeakerEndpoints { get; set; } = new();
 
@@ -49,6 +53,7 @@ public sealed class AppSettings : IDisposable
             var json = File.ReadAllText(SettingsPath);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOpts) ?? new AppSettings();
             settings.ManualSpeakerEndpoints ??= [];
+            settings.ProcessPreferences ??= [];
             return settings;
         }
         catch (Exception ex)
@@ -106,4 +111,11 @@ public sealed record ManualSpeakerEndpoint
     public string Ip { get; init; } = "";
     public ushort Port { get; init; } = 1400;
     public string DisplayName => $"{Ip}:{Port}";
+}
+
+public sealed record AppProcessPreference
+{
+    public string ProcessName { get; init; } = "";
+    public StreamingFormat StreamingFormat { get; set; } = StreamingFormat.Aac256;
+    public StreamingLatencyMode LatencyMode { get; set; } = StreamingLatencyMode.Stable;
 }

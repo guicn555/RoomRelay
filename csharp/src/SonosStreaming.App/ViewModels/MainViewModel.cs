@@ -104,7 +104,16 @@ public sealed partial class MainViewModel : ObservableObject
     public partial string ErrorMessage { get; set; }
 
     [ObservableProperty]
+    public partial string NotificationTitle { get; set; }
+
+    [ObservableProperty]
+    public partial Microsoft.UI.Xaml.Controls.InfoBarSeverity NotificationSeverity { get; set; }
+
+    [ObservableProperty]
     public partial StreamingFormat SelectedFormat { get; set; }
+
+    [ObservableProperty]
+    public partial StreamingLatencyMode SelectedLatencyMode { get; set; }
 
     [ObservableProperty]
     public partial string EncoderLabel { get; set; }
@@ -144,9 +153,13 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (IsProcessSourceSelected && SelectedProcess == null)
                 return "Select an application before starting per-application capture.";
+            if (IsProcessSourceSelected)
+                return "If capture fails, the app may be protected, elevated, browser-isolated, or not producing audio yet. Switch to Whole system as fallback.";
             return "";
         }
     }
+
+    public bool IsWholeSystemSourceSelected => !IsProcessSourceSelected;
 
     public string AppVersionLabel => $"RoomRelay {DiagnosticsPackageService.VersionLabel}";
 
@@ -155,16 +168,31 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string PlaybackTargetLabel { get; set; }
 
-    private static readonly StreamingFormat[] _visibleFormats = Enum.GetValues<StreamingFormat>()
-        .Where(f => f != StreamingFormat.L16Pcm).ToArray();
+    private static readonly StreamingFormat[] _visibleFormats = Enum.GetValues<StreamingFormat>();
     public StreamingFormat[] AvailableFormats { get; } = _visibleFormats;
     public string[] AvailableFormatNames { get; } = _visibleFormats.Select(f => f.DisplayName()).ToArray();
+    private static readonly StreamingLatencyMode[] _visibleLatencyModes = Enum.GetValues<StreamingLatencyMode>();
+    public string[] AvailableLatencyModeNames { get; } = _visibleLatencyModes.Select(m => m.DisplayName()).ToArray();
 
     public int SelectedFormatIndex
     {
         get => (int)SelectedFormat;
         set { if (value >= 0) SelectedFormat = (StreamingFormat)value; }
     }
+
+    public int SelectedLatencyModeIndex
+    {
+        get => (int)SelectedLatencyMode;
+        set { if (value >= 0) SelectedLatencyMode = (StreamingLatencyMode)value; }
+    }
+
+    public string LatencyModeHelp => SelectedLatencyMode == StreamingLatencyMode.LowLatency
+        ? "Low latency uses smaller buffers for PCM/WAV and may be more sensitive to Wi-Fi or older Sonos hardware."
+        : SelectedFormat.IsPcm()
+            ? "Stable keeps larger buffers and is recommended for music, podcasts, radio, and unreliable Wi-Fi."
+            : "AAC always uses Stable mode because Sonos and AAC buffering dominate latency. Use WAV/L16 PCM for low-latency mode.";
+    public string LatencyModeLabel => SelectedLatencyMode.DisplayName();
+    public bool CanSelectLatencyMode => SelectedFormat.IsPcm() && IsNotStreaming;
 
     public bool IsNotStreaming => StateLabel != "Streaming";
 
@@ -200,7 +228,10 @@ public sealed partial class MainViewModel : ObservableObject
         DelayMsL = settings.DelayMsL;
         DelayMsR = settings.DelayMsR;
         ErrorMessage = "";
+        NotificationTitle = "";
+        NotificationSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
         SelectedFormat = settings.StreamingFormat;
+        SelectedLatencyMode = settings.LatencyMode;
         EncoderLabel = settings.StreamingFormat.DisplayName();
         ManualSpeakerIp = "";
         ManualSpeakerPort = "1400";
@@ -212,6 +243,7 @@ public sealed partial class MainViewModel : ObservableObject
         PlaybackTargetLabel = "No room selected";
         ThemePreference = settings.ThemePreference;
         Pipeline.Format = settings.StreamingFormat;
+        Pipeline.LatencyMode = settings.LatencyMode;
         SyncSavedManualEndpoints();
 
         // Apply persisted settings to pipeline stages so restart restores the
@@ -238,7 +270,7 @@ public sealed partial class MainViewModel : ObservableObject
         try { await Pipeline.StopAsync(speaker); } catch { }
         try { _core.BeginStop(); _core.FinishStop(); } catch { }
         ErrorMessage = "Audio format changed. Please restart the stream.";
-        IsErrorVisible = true;
+        ShowNotification("Stream Error", ErrorMessage, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
         StateLabel = "Idle";
     }
 
@@ -321,11 +353,29 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnSelectedFormatChanged(StreamingFormat value)
     {
+        if (!value.IsPcm() && SelectedLatencyMode != StreamingLatencyMode.Stable)
+            SelectedLatencyMode = StreamingLatencyMode.Stable;
+
         Pipeline.Format = value;
         Settings.StreamingFormat = value;
+        RememberSelectedProcessPreference();
         Settings.Save();
         EncoderLabel = value.DisplayName();
         OnPropertyChanged(nameof(SelectedFormatIndex));
+        OnPropertyChanged(nameof(CanSelectLatencyMode));
+        OnPropertyChanged(nameof(LatencyModeHelp));
+    }
+
+    partial void OnSelectedLatencyModeChanged(StreamingLatencyMode value)
+    {
+        Pipeline.LatencyMode = value;
+        Settings.LatencyMode = value;
+        RememberSelectedProcessPreference();
+        Settings.Save();
+        OnPropertyChanged(nameof(SelectedLatencyModeIndex));
+        OnPropertyChanged(nameof(LatencyModeHelp));
+        OnPropertyChanged(nameof(LatencyModeLabel));
+        OnPropertyChanged(nameof(CanSelectLatencyMode));
     }
 
     partial void OnThemePreferenceChanged(ThemePreference value)
@@ -402,6 +452,9 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(SourceStatusLabel));
         if (value != null)
         {
+            Settings.LastProcessName = value.Name;
+            ApplyProcessPreference(value.Name);
+            Settings.Save();
             try { _core.SetSource(AudioSourceSelection.Process, new AudioSourceProcessSelection { Pid = value.Pid, Name = value.DisplayName }); }
             catch (Exception ex) { Log.Warning(ex, "Cannot select process"); }
         }
@@ -414,7 +467,7 @@ public sealed partial class MainViewModel : ObservableObject
         try { await Pipeline.StopAsync(speaker); } catch { }
         try { _core.BeginStop(); _core.FinishStop(); } catch { }
         ErrorMessage = ex.Message;
-        IsErrorVisible = true;
+        ShowNotification("Stream Error", ErrorMessage, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
         StateLabel = "Idle";
     }
 
@@ -422,6 +475,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         StartCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(SourceStatusLabel));
+        OnPropertyChanged(nameof(IsWholeSystemSourceSelected));
     }
 
     // Starts a background task that refreshes the AudioProcesses collection
@@ -469,6 +523,39 @@ public sealed partial class MainViewModel : ObservableObject
             if (!existing.Contains(p.Pid))
                 AudioProcesses.Add(p);
         }
+
+        if (IsProcessSourceSelected && SelectedProcess == null && !string.IsNullOrWhiteSpace(Settings.LastProcessName))
+        {
+            var previous = AudioProcesses.FirstOrDefault(p => string.Equals(p.Name, Settings.LastProcessName, StringComparison.OrdinalIgnoreCase));
+            if (previous != null)
+                SelectedProcess = previous;
+        }
+    }
+
+    private void ApplyProcessPreference(string processName)
+    {
+        var pref = Settings.ProcessPreferences.FirstOrDefault(p => string.Equals(p.ProcessName, processName, StringComparison.OrdinalIgnoreCase));
+        if (pref == null) return;
+
+        SelectedFormat = pref.StreamingFormat;
+        SelectedLatencyMode = pref.LatencyMode;
+    }
+
+    private void RememberSelectedProcessPreference()
+    {
+        var processName = SelectedProcess?.Name;
+        if (!IsProcessSourceSelected) return;
+        if (string.IsNullOrWhiteSpace(processName)) return;
+
+        var pref = Settings.ProcessPreferences.FirstOrDefault(p => string.Equals(p.ProcessName, processName, StringComparison.OrdinalIgnoreCase));
+        if (pref == null)
+        {
+            pref = new AppProcessPreference { ProcessName = processName };
+            Settings.ProcessPreferences.Add(pref);
+        }
+
+        pref.StreamingFormat = SelectedFormat;
+        pref.LatencyMode = SelectedLatencyMode;
     }
 
     [RelayCommand]
@@ -569,7 +656,9 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             Log.Warning(ex, "Manual speaker lookup failed for {Ip}:{Port}", ip, port);
-            ManualSpeakerStatus = $"Could not reach {ip}:{port}";
+            ManualSpeakerStatus = ex is InvalidOperationException && !string.IsNullOrWhiteSpace(ex.Message)
+                ? ex.Message
+                : $"Could not reach {ip}:{port}. Check the IP address, port 1400, firewall, VLAN, and that the device is a Sonos speaker.";
         }
     }
 
@@ -639,6 +728,7 @@ public sealed partial class MainViewModel : ObservableObject
         AddManualSpeakerCommand.NotifyCanExecuteChanged();
         RemoveManualSpeakerCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsNotStreaming));
+        OnPropertyChanged(nameof(CanSelectLatencyMode));
         OnPropertyChanged(nameof(CanAddManualSpeaker));
         OnPropertyChanged(nameof(CanRemoveManualSpeaker));
         OnPropertyChanged(nameof(ClientStatusLabel));
@@ -818,7 +908,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (IsProcessSourceSelected && SelectedProcess == null)
         {
             ErrorMessage = "Select an application before starting per-application capture.";
-            IsErrorVisible = true;
+            ShowNotification("Source Required", ErrorMessage, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning);
             StartCommand.NotifyCanExecuteChanged();
             return;
         }
@@ -842,16 +932,21 @@ public sealed partial class MainViewModel : ObservableObject
             StateLabel = "Streaming";
             PlaybackTargetLabel = speaker.FriendlyName;
 
-            if (Pipeline.CurrentMixFormat is MixFormat fmt)
-                InputFormatLabel = $"{fmt.SampleRate} Hz · {fmt.Channels} ch · {fmt.BitsPerSample}-bit {(fmt.IsFloat ? "float" : "int")}";
+            UpdateInputFormatLabel();
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Start failed");
             try { await Pipeline.StopAsync(speaker); } catch { }
             try { _core.BeginStop(); _core.FinishStop(); } catch { }
-            ErrorMessage = ex.Message;
-            IsErrorVisible = true;
+
+            if (IsProcessSourceSelected && IsPerApplicationCaptureFailure(ex))
+            {
+                if (await TryStartWholeSystemFallbackAsync(speaker, ex))
+                    return;
+            }
+
+            ShowNotification("Stream Error", ex.Message, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
             StateLabel = "Idle";
             OnPropertyChanged(nameof(SelectedSpeakerLabel));
         }
@@ -864,8 +959,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to open logs folder");
-            ErrorMessage = $"Could not open logs folder: {ex.Message}";
-            IsErrorVisible = true;
+            ShowNotification("Logs Error", $"Could not open logs folder: {ex.Message}", Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
         }
     }
 
@@ -874,7 +968,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
-            var package = _diagnostics.CreatePackage(_core, Pipeline, string.IsNullOrWhiteSpace(ErrorMessage) ? null : ErrorMessage);
+            var package = _diagnostics.CreatePackage(_core, Pipeline, Settings, string.IsNullOrWhiteSpace(ErrorMessage) ? null : ErrorMessage);
             DiagnosticsStatus = $"Diagnostics package created: {package}";
             Log.Information("Diagnostics package created at {Path}", package);
             _diagnostics.OpenDiagnosticsPackage(package);
@@ -882,8 +976,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             Log.Warning(ex, "Failed to create diagnostics package");
-            ErrorMessage = $"Could not create diagnostics package: {ex.Message}";
-            IsErrorVisible = true;
+            ShowNotification("Diagnostics Error", $"Could not create diagnostics package: {ex.Message}", Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
         }
 
         return Task.CompletedTask;
@@ -910,5 +1003,77 @@ public sealed partial class MainViewModel : ObservableObject
             try { _core.FinishStop(); } catch { }
             StateLabel = "Idle";
         }
+    }
+
+    private async Task<bool> TryStartWholeSystemFallbackAsync(SonosDevice speaker, Exception originalError)
+    {
+        var failedSource = SelectedProcess?.DisplayName ?? SelectedProcess?.Name ?? "the selected application";
+        Log.Warning(originalError, "Per-application capture failed for {Source}; retrying with whole-system capture", failedSource);
+
+        try
+        {
+            IsProcessSourceSelected = false;
+            _core.SetSource(AudioSourceSelection.WholeSystem);
+            _core.BeginStart();
+            StateLabel = "Starting…";
+
+            await Pipeline.StartAsync(speaker, CancellationToken.None);
+            _core.FinishStart();
+            StateLabel = "Streaming";
+            PlaybackTargetLabel = speaker.FriendlyName;
+            UpdateInputFormatLabel();
+
+            ShowNotification(
+                "Using Whole System",
+                $"{failedSource} cannot be captured per application on this Windows build. RoomRelay switched to whole system audio.",
+                Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning);
+            return true;
+        }
+        catch (Exception fallbackEx)
+        {
+            Log.Error(fallbackEx, "Whole-system fallback failed");
+            try { await Pipeline.StopAsync(speaker); } catch { }
+            try { _core.BeginStop(); _core.FinishStop(); } catch { }
+
+            ShowNotification(
+                "Stream Error",
+                $"Per-application capture failed, and whole-system fallback also failed: {fallbackEx.Message}",
+                Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error);
+            StateLabel = "Idle";
+            OnPropertyChanged(nameof(SelectedSpeakerLabel));
+            return true;
+        }
+    }
+
+    private static bool IsPerApplicationCaptureFailure(Exception ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException!)
+        {
+            if (current is InvalidCastException)
+                return true;
+
+            var message = current.Message;
+            if (message.Contains("Could not capture audio from", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("cannot be captured per-application", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("E_NOINTERFACE", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("No such interface supported", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void UpdateInputFormatLabel()
+    {
+        if (Pipeline.CurrentMixFormat is MixFormat fmt)
+            InputFormatLabel = $"{fmt.SampleRate} Hz · {fmt.Channels} ch · {fmt.BitsPerSample}-bit {(fmt.IsFloat ? "float" : "int")}";
+    }
+
+    private void ShowNotification(string title, string message, Microsoft.UI.Xaml.Controls.InfoBarSeverity severity)
+    {
+        NotificationTitle = title;
+        ErrorMessage = message;
+        NotificationSeverity = severity;
+        IsErrorVisible = true;
     }
 }

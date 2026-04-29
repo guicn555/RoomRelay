@@ -32,12 +32,14 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
 
     private readonly uint _pid;
     private readonly ProcessLoopbackMode _mode;
+    private readonly int _captureBufferMs;
     private readonly MixFormat _format = new(48000, 2, 32, true);
 
-    public ProcessLoopbackSource(int pid, ProcessLoopbackMode mode = ProcessLoopbackMode.IncludeProcessTree)
+    public ProcessLoopbackSource(int pid, ProcessLoopbackMode mode = ProcessLoopbackMode.IncludeProcessTree, int captureBufferMs = 200)
     {
         _pid = (uint)pid;
         _mode = mode;
+        _captureBufferMs = captureBufferMs;
     }
 
     public new MixFormat MixFormat => _format;
@@ -76,7 +78,7 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
             cbSize = 0,
         };
 
-        const long hnsBufferDuration = 2_000_000L;
+        long hnsBufferDuration = _captureBufferMs * 10_000L;
         try
         {
             client.Initialize(
@@ -96,7 +98,7 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         }
 
         BeginCapture(client, &wfx, $"ProcessLoopback-{_pid}");
-        Log.Information("Process loopback capture started for pid={Pid} mode={Mode}", _pid, _mode);
+        Log.Information("Process loopback capture started for pid={Pid} mode={Mode} buffer={BufferMs} ms", _pid, _mode, _captureBufferMs);
     }
 
     private WinAudioClient ActivateSync()
@@ -292,9 +294,11 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                                             catch { }
 
                                             var (processName, friendlyName) = GetProcessLabels(pid);
-                                            if (!IsUserFacingProcess(pid, processName))
+                                            if (!IsUserFacingProcess(pid, processName, sessionName, friendlyName))
                                             {
                                                 systemPidSkipped++;
+                                                Log.Verbose("Skipping audio session pid={Pid} process={Process} session={Session} friendly={Friendly}",
+                                                    pid, processName ?? "n/a", sessionName ?? "n/a", friendlyName ?? "n/a");
                                                 continue;
                                             }
                                             string displayName = !string.IsNullOrEmpty(sessionName)
@@ -346,9 +350,26 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         "msedge", "chrome", "firefox", "opera", "brave", "vivaldi"
     };
 
-    private static bool IsUserFacingProcess(int pid, string? processName)
+    private static readonly string[] KnownMediaPlayers = new[]
+    {
+        "spotify", "foobar2000", "musicbee", "aimp", "vlc", "winamp", "mediamonkey", "groove",
+        "wmplayer", "mediaplayer", "microsoft.media.player", "zunemusic",
+        "applemusic", "itunes", "tidal", "qobuz", "deezer", "amazonmusic", "amazon music",
+        "plexamp", "roon", "audirvana", "jriver", "musicbee", "potplayer", "mpc-hc", "mpc-be",
+        "youtube music", "ytmusic", "youtubemusic"
+    };
+
+    private static readonly string[] KnownMediaLabels = new[]
+    {
+        "media player", "windows media player", "spotify", "foobar2000", "musicbee", "aimp", "vlc", "winamp", "mediamonkey",
+        "apple music", "itunes", "tidal", "qobuz", "deezer", "amazon music", "plexamp", "roon", "audirvana",
+        "youtube music", "yt music", "jriver", "potplayer", "media player classic", "mpc-hc", "mpc-be"
+    };
+
+    private static bool IsUserFacingProcess(int pid, string? processName, string? sessionName, string? friendlyName)
     {
         if (string.IsNullOrEmpty(processName)) return false;
+        if (IsKnownMediaProcess(processName) || IsKnownMediaLabel(sessionName) || IsKnownMediaLabel(friendlyName)) return true;
         if (SystemProcessNames.Contains(processName, StringComparer.OrdinalIgnoreCase)) return false;
 
         try
@@ -374,9 +395,6 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
             // Some legitimate media apps hide their main window when minimized to tray.
             if (!string.IsNullOrWhiteSpace(proc.MainWindowTitle)) return true;
 
-            var knownMediaPlayers = new[] { "spotify", "foobar2000", "musicbee", "aimp", "vlc", "winamp", "mediamonkey", "groove" };
-            if (knownMediaPlayers.Contains(processName, StringComparer.OrdinalIgnoreCase)) return true;
-
             return false;
         }
         catch
@@ -384,6 +402,13 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
             return false;
         }
     }
+
+    private static bool IsKnownMediaProcess(string processName) =>
+        KnownMediaPlayers.Contains(processName, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsKnownMediaLabel(string? label) =>
+        !string.IsNullOrWhiteSpace(label) &&
+        KnownMediaLabels.Any(known => label.Contains(known, StringComparison.OrdinalIgnoreCase));
 
     private static (string? processName, string? friendlyName) GetProcessLabels(int pid)
     {

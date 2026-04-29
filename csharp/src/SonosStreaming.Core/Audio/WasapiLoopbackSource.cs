@@ -18,8 +18,12 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
 
     private Thread? _silenceThread;
     private long _lastDataTicks;
+    private readonly int _captureBufferMs;
 
-    public WasapiLoopbackSource() { }
+    public WasapiLoopbackSource(int captureBufferMs = 200)
+    {
+        _captureBufferMs = captureBufferMs;
+    }
 
     // Allow querying the mix format before Start() is called.
     public new MixFormat MixFormat => _mixFormat ?? ProbeMixFormat();
@@ -43,7 +47,7 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
         client.GetMixFormat(&pwfx);
         try
         {
-            const long hnsBufferDuration = 2_000_000L; // 200 ms
+            long hnsBufferDuration = _captureBufferMs * 10_000L;
             client.Initialize(
                 AUDCLNT_SHAREMODE.AUDCLNT_SHAREMODE_SHARED,
                 AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -55,8 +59,8 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
             _lastDataTicks = DateTime.UtcNow.Ticks;
             BeginCapture(client, pwfx, "WasapiLoopback");
 
-            Log.Information("WASAPI loopback capture started: {Rate} Hz, {Ch} ch, {Bits}-bit, float={IsFloat}",
-                _mixFormat!.SampleRate, _mixFormat!.Channels, _mixFormat!.BitsPerSample, _mixFormat!.IsFloat);
+            Log.Information("WASAPI loopback capture started: {Rate} Hz, {Ch} ch, {Bits}-bit, float={IsFloat}, buffer={BufferMs} ms",
+                _mixFormat!.SampleRate, _mixFormat!.Channels, _mixFormat!.BitsPerSample, _mixFormat!.IsFloat, _captureBufferMs);
         }
         finally
         {

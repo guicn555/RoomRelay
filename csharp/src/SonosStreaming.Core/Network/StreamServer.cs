@@ -19,12 +19,14 @@ public sealed class StreamServer : IStreamServer
     private readonly List<Task> _connectionTasks = new();
     private readonly object _lock = new();
     private IPEndPoint _localEndPoint;
+    private int _slowWriteCount;
 
     // 44-byte RIFF/WAVE header for 48 kHz stereo 16-bit PCM streaming.
     private static readonly byte[] LpcmWavHeader = GenerateWavHeader();
 
     public IPEndPoint LocalEndPoint => _localEndPoint;
     public string StreamPath => $"/stream/{_streamToken}{_format.FileExtension()}";
+    public int SlowWriteCount => Volatile.Read(ref _slowWriteCount);
 
     public StreamServer(BroadcastChannel<ReadOnlyMemory<byte>> broadcast, int port = 8000, StreamingFormat format = StreamingFormat.Aac256, IPAddress? bindAddress = null)
     {
@@ -181,6 +183,7 @@ public sealed class StreamServer : IStreamServer
                     if (writeMs > 250)
                     {
                         slowWrites++;
+                        Interlocked.Increment(ref _slowWriteCount);
                         Log.Warning("Slow stream write to {Peer}: {Bytes} bytes in {Ms:F0} ms (format={Format})",
                             peer, frame.Length, writeMs, _format);
                     }

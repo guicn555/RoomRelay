@@ -34,6 +34,16 @@ public class LpcmEncoderTests
     }
 
     [Fact]
+    public void Encode_LowLatencyThreshold_FlushesEarlier()
+    {
+        using var enc = new LpcmEncoder(minFlushBytes: 4096);
+        for (int i = 0; i < 5; i++)
+            enc.Encode(MakeFrame(new short[480]));
+
+        enc.FlushChunk().Length.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
     public void Drain_FlushesAllRemainingData()
     {
         using var enc = new LpcmEncoder();
