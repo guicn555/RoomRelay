@@ -3,7 +3,7 @@
 ; Compile with: iscc installer.iss
 
 #define MyAppName "RoomRelay"
-#define MyAppVersion "1.0.5"
+#define MyAppVersion "1.0.6"
 #define MyAppPublisher "guicn555"
 #define MyAppURL "https://github.com/guicn555/RoomRelay"
 #define MyAppExeName "RoomRelay.exe"
@@ -34,7 +34,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\publish\RoomRelay-v1.0.5\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "..\publish\RoomRelay-v1.0.6\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

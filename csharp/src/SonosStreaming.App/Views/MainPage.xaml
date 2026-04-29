@@ -29,7 +29,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid Padding="12">
+    <Grid Padding="12" MinWidth="816" MinHeight="620">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="380" />
             <ColumnDefinition Width="12" />
@@ -37,7 +37,7 @@
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="0" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="6" />
             <RowDefinition Height="Auto" />
@@ -96,6 +96,17 @@
             </Grid>
         </Border>
 
+        <InfoBar
+            Grid.Row="1"
+            Grid.ColumnSpan="3"
+            Margin="0,12,0,0"
+            Title="{x:Bind ViewModel.NotificationTitle, Mode=OneWay}"
+            Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
+            IsOpen="{x:Bind ViewModel.IsErrorVisible, Mode=OneWay}"
+            Severity="{x:Bind ViewModel.NotificationSeverity, Mode=OneWay}"
+            IsClosable="True"
+            CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
+
         <!-- Left panel -->
         <ScrollViewer Grid.Row="2" Grid.Column="0" VerticalScrollMode="Auto">
             <StackPanel Spacing="16">
@@ -115,6 +126,10 @@
                             BorderThickness="0" />
                         <TextBlock
                             Text="Grouped rooms and stereo pairs are shown as one Sonos playback target."
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            TextWrapping="Wrap" />
+                        <TextBlock
+                            Text="If no rooms appear, allow RoomRelay through Windows Firewall, disable VPN split tunneling, check that PC and Sonos are on the same subnet/VLAN, or add the room by IP."
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextWrapping="Wrap" />
                         <TextBlock
@@ -138,24 +153,12 @@
                     </StackPanel>
                 </Border>
 
-                <InfoBar
-                    Title="Stream Error"
-                    Message="{x:Bind ViewModel.ErrorMessage, Mode=OneWay}"
-                    IsOpen="{x:Bind ViewModel.IsErrorVisible, Mode=OneWay}"
-                    Severity="Error"
-                    IsClosable="True"
-                    CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
-                <TextBlock
-                    Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    TextWrapping="Wrap" />
-
                 <!-- Manual speaker -->
                 <Border Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock Text="Add by IP" Style="{StaticResource SectionHeaderStyle}" />
                         <TextBlock
-                            Text="Use this if SSDP discovery misses a room. Manual entries are saved and included in future scans."
+                            Text="Use this if SSDP discovery misses a room. Manual entries are saved and included in future scans. Most Sonos speakers use port 1400."
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             TextWrapping="Wrap" />
                         <Grid ColumnSpacing="8" Margin="0,4,0,0">
@@ -215,8 +218,8 @@
                 <Border Style="{StaticResource CardBorderStyle}">
                     <StackPanel Spacing="8">
                         <TextBlock Text="Source" Style="{StaticResource SectionHeaderStyle}" />
-                        <RadioButton x:Name="WholeSystemRadio" Content="Whole system" GroupName="Source" IsChecked="True" Checked="WholeSystemRadio_Checked" />
-                        <RadioButton x:Name="ProcessRadio" Content="Per application" GroupName="Source" Checked="ProcessRadio_Checked" />
+                        <RadioButton x:Name="WholeSystemRadio" Content="Whole system" GroupName="Source" IsChecked="{x:Bind ViewModel.IsWholeSystemSourceSelected, Mode=OneWay}" Checked="WholeSystemRadio_Checked" />
+                        <RadioButton x:Name="ProcessRadio" Content="Per application" GroupName="Source" IsChecked="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}" Checked="ProcessRadio_Checked" />
                         <TextBlock Text="Per-application capture uses Windows process loopback and works best on current Windows 11 builds. Use Whole system if an app does not appear or cannot start." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <ComboBox
                             ItemsSource="{x:Bind ViewModel.AudioProcesses, Mode=OneWay}"
@@ -235,6 +238,13 @@
                             SelectedIndex="{x:Bind ViewModel.SelectedFormatIndex, Mode=TwoWay}"
                             IsEnabled="{x:Bind ViewModel.IsNotStreaming, Mode=OneWay}"
                             HorizontalAlignment="Stretch" />
+                        <TextBlock Text="Latency mode" Margin="0,8,0,0" />
+                        <ComboBox
+                            ItemsSource="{x:Bind ViewModel.AvailableLatencyModeNames}"
+                            SelectedIndex="{x:Bind ViewModel.SelectedLatencyModeIndex, Mode=TwoWay}"
+                            IsEnabled="{x:Bind ViewModel.CanSelectLatencyMode, Mode=OneWay}"
+                            HorizontalAlignment="Stretch" />
+                        <TextBlock Text="{x:Bind ViewModel.LatencyModeHelp, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     </StackPanel>
                 </Border>
 
@@ -371,18 +381,38 @@
                 BorderThickness="1"
                 CornerRadius="8"
                 Padding="12,8">
-            <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
-                <Ellipse Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
-                <TextBlock Text="{x:Bind ViewModel.StateLabel, Mode=OneWay}" VerticalAlignment="Center" />
-                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.PlaybackTargetLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.EncoderLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                <Rectangle Width="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-                <TextBlock Text="{x:Bind ViewModel.ClientStatusLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
+            <Grid ColumnSpacing="12" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Grid Grid.Column="0" ColumnSpacing="12" MinWidth="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="1.2*" MinWidth="120" />
+                        <ColumnDefinition Width="1.4*" MinWidth="140" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="1.2*" MinWidth="150" />
+                    </Grid.ColumnDefinitions>
+                    <Ellipse Grid.Column="0" Width="10" Height="10" Fill="{x:Bind ViewModel.StatusBrush, Mode=OneWay}" />
+                    <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.StateLabel, Mode=OneWay}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.PlaybackTargetLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.PlaybackTargetLabel, Mode=OneWay}" />
+                    <TextBlock Grid.Column="3" Text="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.InputFormatLabel, Mode=OneWay}" />
+                    <TextBlock Grid.Column="4" Text="{x:Bind ViewModel.EncoderLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="5" Text="{x:Bind ViewModel.LatencyModeLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="6" Text="{x:Bind ViewModel.ClientStatusLabel, Mode=OneWay}" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind ViewModel.ClientStatusLabel, Mode=OneWay}" />
+                </Grid>
+                <TextBlock
+                    Grid.Column="1"
+                    Text="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}"
+                    VerticalAlignment="Center"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextTrimming="CharacterEllipsis"
+                    MaxWidth="420"
+                    ToolTipService.ToolTip="{x:Bind ViewModel.DiagnosticsStatus, Mode=OneWay}" />
+            </Grid>
         </Border>
     </Grid>
 </Page>

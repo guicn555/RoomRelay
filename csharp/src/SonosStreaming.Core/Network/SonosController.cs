@@ -124,9 +124,12 @@ public sealed class SonosController : ISonosController
         => await SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme, "audio/aac").ConfigureAwait(false);
 
     public async Task SetUriAndPlayAsync(SonosDevice device, string streamUrl, CancellationToken ct, bool useRadioScheme, string contentType)
+        => await SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme, contentType, metadataTitle: null).ConfigureAwait(false);
+
+    public async Task SetUriAndPlayAsync(SonosDevice device, string streamUrl, CancellationToken ct, bool useRadioScheme, string contentType, string? metadataTitle)
     {
         string uriArg = useRadioScheme ? StripScheme(streamUrl) : streamUrl;
-        var title = $"RoomRelay — {device.FriendlyName}";
+        var title = string.IsNullOrWhiteSpace(metadataTitle) ? $"RoomRelay - {device.FriendlyName}" : metadataTitle;
         await CallAsync(device.AvTransportControlUrl, "SetAVTransportURI", BuildSetUriEnvelope(uriArg, useRadioScheme, title, streamUrl, contentType), ct).ConfigureAwait(false);
 
         try

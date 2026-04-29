@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using System.Runtime.InteropServices;
 using SonosStreaming.App.ViewModels;
 using SonosStreaming.Core.State;
 using Windows.Win32;
@@ -16,9 +17,15 @@ namespace SonosStreaming.App;
 
 public sealed partial class MainWindow : Window
 {
+    private const int MinWindowWidth = 816;
+    private const int MinWindowHeight = 700;
+    private const uint WM_GETMINMAXINFO = 0x0024;
+    private static readonly UIntPtr MinSizeSubclassId = new(1);
+
     private bool _exiting;
     private Grid? _root;
     private Grid? _titleBar;
+    private SubclassProc? _subclassProc;
 
     public void MarkExiting() => _exiting = true;
 
@@ -33,13 +40,14 @@ public sealed partial class MainWindow : Window
         var appWindow = GetAppWindow();
         if (appWindow != null)
         {
-            appWindow.Resize(new Windows.Graphics.SizeInt32(900, 680));
+            appWindow.Resize(new Windows.Graphics.SizeInt32(855, 720));
             var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "sonos-streaming.ico");
             if (System.IO.File.Exists(iconPath))
             {
                 try { appWindow.SetIcon(iconPath); } catch { }
             }
         }
+        InstallMinSizeHook();
 
         _root = new Grid { RequestedTheme = ToElementTheme(vm.ThemePreference) };
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
@@ -242,5 +250,54 @@ public sealed partial class MainWindow : Window
         Hwnd = hwnd;
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         return AppWindow.GetFromWindowId(windowId);
+    }
+
+    private void InstallMinSizeHook()
+    {
+        if (Hwnd == IntPtr.Zero || _subclassProc != null) return;
+        _subclassProc = MinSizeSubclassProc;
+        SetWindowSubclass(Hwnd, _subclassProc, MinSizeSubclassId, UIntPtr.Zero);
+    }
+
+    private IntPtr MinSizeSubclassProc(IntPtr hwnd, uint msg, UIntPtr wParam, IntPtr lParam, UIntPtr idSubclass, UIntPtr refData)
+    {
+        if (msg == WM_GETMINMAXINFO)
+        {
+            var info = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+            info.ptMinTrackSize.X = MinWindowWidth;
+            info.ptMinTrackSize.Y = MinWindowHeight;
+            Marshal.StructureToPtr(info, lParam, false);
+            return IntPtr.Zero;
+        }
+
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    }
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, UIntPtr uIdSubclass, UIntPtr dwRefData);
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool RemoveWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, UIntPtr uIdSubclass);
+
+    [DllImport("comctl32.dll")]
+    private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, UIntPtr wParam, IntPtr lParam);
+
+    private delegate IntPtr SubclassProc(IntPtr hWnd, uint uMsg, UIntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MINMAXINFO
+    {
+        public POINT ptReserved;
+        public POINT ptMaxSize;
+        public POINT ptMaxPosition;
+        public POINT ptMinTrackSize;
+        public POINT ptMaxTrackSize;
     }
 }

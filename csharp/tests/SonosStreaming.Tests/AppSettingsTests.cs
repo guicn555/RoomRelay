@@ -1,4 +1,5 @@
 using SonosStreaming.Core.Audio;
+using SonosStreaming.Core.Pipeline;
 using SonosStreaming.Core.State;
 using FluentAssertions;
 using Xunit;
@@ -51,6 +52,12 @@ public class AppSettingsTests : IDisposable
             DelayMsL = 10.0f,
             DelayMsR = 5.0f,
             LastSpeakerUdn = "uuid:test-speaker",
+            LastProcessName = "vlc",
+            LatencyMode = StreamingLatencyMode.LowLatency,
+            ProcessPreferences =
+            [
+                new AppProcessPreference { ProcessName = "vlc", StreamingFormat = StreamingFormat.WavPcm, LatencyMode = StreamingLatencyMode.LowLatency },
+            ],
             ManualSpeakerEndpoints =
             [
                 new ManualSpeakerEndpoint { Ip = "192.168.1.50", Port = 1400 },
@@ -72,6 +79,9 @@ public class AppSettingsTests : IDisposable
         loaded.DelayMsL.Should().Be(10.0f);
         loaded.DelayMsR.Should().Be(5.0f);
         loaded.LastSpeakerUdn.Should().Be("uuid:test-speaker");
+        loaded.LastProcessName.Should().Be("vlc");
+        loaded.LatencyMode.Should().Be(StreamingLatencyMode.LowLatency);
+        loaded.ProcessPreferences.Should().BeEquivalentTo(original.ProcessPreferences);
         loaded.ManualSpeakerEndpoints.Should().BeEquivalentTo(original.ManualSpeakerEndpoints);
     }
 
@@ -125,5 +135,14 @@ public class AppSettingsTests : IDisposable
 
         loaded.ThemePreference.Should().Be(ThemePreference.Dark);
         original.Dispose();
+    }
+
+    [Fact]
+    public void Load_WithNoFile_DefaultsToStableLatency()
+    {
+        var s = AppSettings.Load();
+
+        s.LatencyMode.Should().Be(StreamingLatencyMode.Stable);
+        s.ProcessPreferences.Should().BeEmpty();
     }
 }

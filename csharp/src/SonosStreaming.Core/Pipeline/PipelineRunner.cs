@@ -3,6 +3,7 @@ using SonosStreaming.Core.Audio.Dsp;
 using SonosStreaming.Core.Network;
 using SonosStreaming.Core.State;
 using Serilog;
+using System.Net;
 
 namespace SonosStreaming.Core.Pipeline;
 
@@ -20,6 +21,7 @@ public sealed class PipelineRunner : IDisposable
     private readonly BroadcastChannel<ReadOnlyMemory<byte>> _broadcast;
 
     public StreamingFormat Format { get; set; } = StreamingFormat.Aac256;
+    public StreamingLatencyMode LatencyMode { get; set; } = StreamingLatencyMode.Stable;
 
     private StreamServer? _streamServer;
     private IAudioSource? _audioSource;
@@ -31,6 +33,7 @@ public sealed class PipelineRunner : IDisposable
     private Task? _pumpTask;
     private Task? _clientCountTask;
     private long _framesEmitted;
+    private int _lastSlowWriteCount;
     private DateTime _pipelineStart;
     private DateTime _lastFrameLog;
     private int _clippingHold;
@@ -45,6 +48,13 @@ public sealed class PipelineRunner : IDisposable
     public BroadcastChannel<ReadOnlyMemory<byte>> Broadcast => _broadcast;
     public MixFormat? CurrentMixFormat { get; private set; }
     public bool IsClipping { get; private set; }
+    public IPAddress? CurrentLocalIp { get; private set; }
+    public string? CurrentStreamUrl { get; private set; }
+    public DateTime? StartedAtUtc { get; private set; }
+    public DateTime? FirstChunkAtUtc { get; private set; }
+    public DateTime? FirstClientAtUtc { get; private set; }
+    public long FramesEmitted => Interlocked.Read(ref _framesEmitted);
+    public int SlowWriteCount => _streamServer?.SlowWriteCount ?? _lastSlowWriteCount;
 
     /// <summary>
     /// Raised when the pump loop terminates with an unhandled exception.
@@ -80,8 +90,11 @@ public sealed class PipelineRunner : IDisposable
             throw new InvalidOperationException("Select an application before starting per-application capture.");
 
         var localIp = LocalIpResolver.PickLocalIpFor(device.Ip);
+        CurrentLocalIp = localIp;
         _streamServer = new StreamServer(_broadcast, _options.HttpPort, Format, localIp);
         _streamServer.Start();
+        Log.Information("Pipeline latency mode: {LatencyMode}, captureBuffer={CaptureBufferMs} ms, pcmFlushBytes={PcmFlushBytes}",
+            LatencyMode, LatencyMode.CaptureBufferMs(), LatencyMode.PcmFlushBytes());
 
         if (selection.Source == AudioSourceSelection.Process && selection.ProcessSelection != null)
         {
@@ -94,7 +107,7 @@ public sealed class PipelineRunner : IDisposable
                 selection.ProcessSelection.Pid, selection.ProcessSelection.Name);
             try
             {
-                var plb = new ProcessLoopbackSource(selection.ProcessSelection.Pid);
+                var plb = new ProcessLoopbackSource(selection.ProcessSelection.Pid, captureBufferMs: LatencyMode.CaptureBufferMs());
                 plb.Start();
                 _audioSource = plb;
             }
@@ -108,7 +121,7 @@ public sealed class PipelineRunner : IDisposable
         }
         else
         {
-            var wsl = new WasapiLoopbackSource();
+            var wsl = new WasapiLoopbackSource(LatencyMode.CaptureBufferMs());
             wsl.Start();
             _audioSource = wsl;
         }
@@ -123,7 +136,11 @@ public sealed class PipelineRunner : IDisposable
         // thread. StartAsync is typically invoked on the UI STA thread.
 
         _framesEmitted = 0;
+        _lastSlowWriteCount = 0;
         _pipelineStart = DateTime.UtcNow;
+        StartedAtUtc = _pipelineStart;
+        FirstChunkAtUtc = null;
+        FirstClientAtUtc = null;
         _lastFrameLog = _pipelineStart;
         _pumpTask = Task.Run(() => PumpLoopAsync(token), token);
 
@@ -135,6 +152,11 @@ public sealed class PipelineRunner : IDisposable
                 {
                     await Task.Delay(500, token).ConfigureAwait(false);
                     ClientCount = _broadcast.SubscriberCount;
+                    if (ClientCount > 0 && FirstClientAtUtc == null)
+                    {
+                        FirstClientAtUtc = DateTime.UtcNow;
+                        Log.Information("First Sonos client connected after {Ms:F0} ms", (FirstClientAtUtc.Value - _pipelineStart).TotalMilliseconds);
+                    }
                 }
                 catch (OperationCanceledException) { break; }
             }
@@ -162,11 +184,12 @@ public sealed class PipelineRunner : IDisposable
 
         var port = _streamServer.LocalEndPoint.Port;
         var streamUrl = _streamServer.StreamUrl($"{SsdpDiscovery.FormatHost(localIp)}:{port}");
+        CurrentStreamUrl = streamUrl;
         Log.Information("Instructing {Name} to stream from {Url} format={Format} contentType={ContentType} radioScheme={RadioScheme}",
             device.FriendlyName, streamUrl, Format, Format.ContentType(), !Format.IsPcm());
 
         var sonos = new SonosController();
-        await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: !Format.IsPcm(), contentType: Format.MetadataMimeType()).ConfigureAwait(false);
+        await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: !Format.IsPcm(), contentType: Format.MetadataMimeType(), metadataTitle: BuildMetadataTitle(selection, device)).ConfigureAwait(false);
     }
 
     public async Task StopAsync(SonosDevice? device)
@@ -210,6 +233,7 @@ public sealed class PipelineRunner : IDisposable
 
         if (_streamServer != null)
         {
+            _lastSlowWriteCount = _streamServer.SlowWriteCount;
             await _streamServer.ShutdownAsync().ConfigureAwait(false);
             _streamServer.Dispose();
             _streamServer = null;
@@ -224,6 +248,8 @@ public sealed class PipelineRunner : IDisposable
         _broadcast.CompleteAll();
         ClientCount = 0;
         CurrentMixFormat = null;
+        CurrentLocalIp = null;
+        CurrentStreamUrl = null;
 
         await sonosStop.ConfigureAwait(false);
         Log.Information("Pipeline stopped in {Ms:F0} ms", (DateTime.UtcNow - t0).TotalMilliseconds);
@@ -242,8 +268,8 @@ public sealed class PipelineRunner : IDisposable
                 StreamingFormat.Aac192 => new MfAacEncoder(192_000),
                 StreamingFormat.Aac256 => new MfAacEncoder(256_000),
                 StreamingFormat.Aac320 => new MfAacEncoder(320_000),
-                StreamingFormat.WavPcm => (IAudioEncoder)new LpcmEncoder(),
-                StreamingFormat.L16Pcm => new L16PcmEncoder(),
+                StreamingFormat.WavPcm => (IAudioEncoder)new LpcmEncoder(LatencyMode.PcmFlushBytes()),
+                StreamingFormat.L16Pcm => new L16PcmEncoder(LatencyMode.PcmFlushBytes()),
                 _                      => new MfAacEncoder(256_000),
             };
 
@@ -284,8 +310,13 @@ public sealed class PipelineRunner : IDisposable
                 var chunk = _encoder.FlushChunk();
                 if (!chunk.IsEmpty)
                 {
+                    if (FirstChunkAtUtc == null)
+                    {
+                        FirstChunkAtUtc = DateTime.UtcNow;
+                        Log.Information("First audio chunk emitted after {Ms:F0} ms", (FirstChunkAtUtc.Value - _pipelineStart).TotalMilliseconds);
+                    }
                     _broadcast.Write(chunk);
-                    _framesEmitted++;
+                    Interlocked.Increment(ref _framesEmitted);
                 }
 
                 var now = DateTime.UtcNow;
@@ -324,6 +355,14 @@ public sealed class PipelineRunner : IDisposable
     }
 
     public int ClientCount { get; private set; }
+
+    private static string BuildMetadataTitle(Selection selection, SonosDevice device)
+    {
+        var source = selection.Source == AudioSourceSelection.Process && selection.ProcessSelection != null
+            ? selection.ProcessSelection.Name
+            : "Whole system";
+        return $"RoomRelay - {source} to {device.FriendlyName}";
+    }
 
     private void UpdateClipping(ReadOnlySpan<float> samples)
     {

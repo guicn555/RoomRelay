@@ -47,6 +47,10 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
 - Discover Sonos speakers on the local network.
 - Collapse stereo pairs into one selectable room.
 - Built-in volume, per-channel gain, EQ, delay, VU, and spectrum tools.
+- Stable and low-latency streaming modes, with WAV/L16 PCM options for users
+  willing to trade bandwidth and compatibility for lower buffering.
+- Per-application format and latency preferences are remembered when the app
+  session appears again.
 - Tray icon with show/quit actions and close-to-tray behavior.
 - Single-instance behavior: launching RoomRelay again restores the existing
   window instead of opening a duplicate instance.
@@ -60,8 +64,8 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
 - Like most network Sonos streaming approaches, it is not intended for
   low-latency gaming or video sync.
 - AAC is the recommended default and may have several seconds of Sonos buffering
-  latency. LPCM/WAV is lower latency but experimental, high-bandwidth, and more
-  sensitive to Wi-Fi or older Sonos hardware.
+  latency. WAV/L16 PCM is lower latency but experimental, high-bandwidth, and
+  more sensitive to Wi-Fi or older Sonos hardware.
 - Per-application capture depends on Windows process-loopback support and is
   best on current Windows 11 builds.
 - The first run may require allowing the Windows Defender Firewall prompt on
@@ -118,6 +122,67 @@ Install RoomRelay from the installer, or extract the ZIP and run
 > Prefer an installer? See [`csharp/installer/`](csharp/installer/) for an
 > [Inno Setup](https://jrsoftware.org/isinfo.php) script that builds a
 > standard Windows `.exe` installer with shortcuts and clean uninstall.
+
+## Recommended settings
+
+| Use case | Format | Latency mode | Notes |
+|---|---|---|---|
+| Music, podcasts, radio | AAC 256 kbps | Stable | Recommended default; most tolerant of Wi-Fi and older speakers. |
+| Casual video | WAV PCM or L16 PCM | Low latency | Lower buffering, but high bandwidth and model/network dependent. |
+| Unstable Wi-Fi | AAC 128/192/256 kbps | Stable | Prefer AAC and avoid PCM until the network is reliable. |
+| Older Sonos hardware | AAC 256 kbps | Stable | PCM may fail, stutter, or buffer for a long time. |
+| Per-application capture | Start with AAC 256 kbps | Stable | Switch to Whole system if the app is protected, elevated, browser-isolated, or silent. |
+
+### Latency modes
+
+- **Stable** keeps larger capture and PCM batching buffers. Use it when audio
+  quality and reliability matter more than delay.
+- **Low latency** uses smaller WASAPI and PCM buffers. It can reduce delay for
+  WAV/L16 streams, but it is more sensitive to packet loss, slow writes, and
+  Sonos model behavior.
+- RoomRelay still cannot bypass Sonos' own network buffering. It is not a
+  replacement for HDMI, analog speakers, or gaming/headset audio.
+
+### Format compatibility
+
+- **AAC** is the safest Sonos path and remains the default.
+- **WAV PCM** is lossless 48 kHz stereo in a streaming WAV container. It uses
+  about 1.5 Mbps and may require more Sonos buffering before playback starts.
+- **L16 PCM** is raw network-order PCM advertised as `audio/L16`. It has less
+  container overhead, but compatibility may vary by Sonos model and firmware.
+
+### Troubleshooting discovery
+
+- Allow the Windows Defender Firewall prompt on the private network where Sonos
+  lives.
+- Keep the PC and Sonos on the same subnet/VLAN when possible. SSDP discovery
+  often fails across guest networks, VLAN boundaries, and some mesh isolation
+  modes.
+- Disable VPNs or split-tunnel rules that hijack local multicast traffic.
+- Use **Add by IP** if discovery misses a room. Most Sonos speakers expose the
+  device-description endpoint on port `1400`.
+- Create a diagnostics package when reporting problems. It includes network
+  adapters, selected room, local stream IP, format, latency mode, and timing
+  counters.
+
+### Per-application capture
+
+- Per-app capture uses Windows process loopback and is best on current Windows
+  11 builds.
+- Some browsers, protected media apps, elevated processes, system apps, and
+  short-lived sessions may not be capturable.
+- RoomRelay remembers the last selected app by process name and restores that
+  app's preferred format and latency mode when it appears again.
+
+## Compared with other approaches
+
+| Option | Strength | Tradeoff |
+|---|---|---|
+| RoomRelay | Native Windows live/app audio to Sonos without AirPlay or Bluetooth | Local-network only; Sonos buffering still applies. |
+| AirPlay from Windows apps | Useful when a Windows app exposes AirPlay directly | Model-specific failures are common, and not all Sonos devices support AirPlay. |
+| Bluetooth | Simple on speakers that support it | Not available on many Sonos speakers and does not integrate cleanly with groups. |
+| Sonos line-in | Hardware-supported path on compatible Sonos devices | Requires line-in hardware and still has Sonos buffering delay. |
+| Stream What You Hear | Older Windows workaround | Abandoned/legacy feel and no per-application capture. |
 
 ## What it does
 
