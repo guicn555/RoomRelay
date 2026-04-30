@@ -171,8 +171,17 @@ Install RoomRelay from the installer, or extract the ZIP and run
   11 builds.
 - Some browsers, protected media apps, elevated processes, system apps, and
   short-lived sessions may not be capturable.
+- If the per-app list is empty, start playback in the target app, wait a few
+  seconds, then click **Refresh apps**.
+- Enable **Show all audio sessions** to reveal advanced entries that RoomRelay
+  normally hides. These entries can help diagnose empty-list reports, but some
+  of them may still fail Windows process-loopback capture.
+- Use **Whole system** mode when the target app does not appear or cannot be
+  captured per-application.
 - RoomRelay remembers the last selected app by process name and restores that
   app's preferred format and latency mode when it appears again.
+- Diagnostics packages include the latest per-app enumeration counts, including
+  total sessions, filtered sessions, system sessions, and kept app sessions.
 
 ## Compared with other approaches
 

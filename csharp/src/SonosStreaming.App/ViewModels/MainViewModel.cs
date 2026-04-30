@@ -27,6 +27,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     public ObservableCollection<AudioProcess> AudioProcesses { get; } = new();
 
+    public AudioProcessEnumerationResult? LastAudioProcessEnumeration { get; private set; }
+
     [ObservableProperty]
     public partial string StateLabel { get; set; }
 
@@ -93,6 +95,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     public partial AudioProcess? SelectedProcess { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowAllAudioSessions { get; set; }
+
+    [ObservableProperty]
+    public partial string AudioProcessStatus { get; set; }
 
     [ObservableProperty]
     public partial bool IsProcessSourceSelected { get; set; }
@@ -227,6 +235,7 @@ public sealed partial class MainViewModel : ObservableObject
         EqHighDb = settings.EqHighDb;
         DelayMsL = settings.DelayMsL;
         DelayMsR = settings.DelayMsR;
+        AudioProcessStatus = "Looking for app audio sessions...";
         ErrorMessage = "";
         NotificationTitle = "";
         NotificationSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
@@ -478,6 +487,14 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(IsWholeSystemSourceSelected));
     }
 
+    partial void OnShowAllAudioSessionsChanged(bool value)
+    {
+        AudioProcessStatus = value
+            ? "Showing all non-system audio sessions. Some entries may not support per-app capture."
+            : "Showing likely user-facing audio apps only.";
+        _ = RefreshAudioProcessesAsync();
+    }
+
     // Starts a background task that refreshes the AudioProcesses collection
     // every 2s so apps opening/closing their audio sessions appear in the
     // combo without requiring a manual Rescan. Must be called from the UI
@@ -494,8 +511,8 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 try
                 {
-                    var procs = ProcessLoopbackSource.EnumerateActiveAudioProcesses();
-                    _dq?.TryEnqueue(() => SyncAudioProcesses(procs));
+                    var enumeration = ProcessLoopbackSource.EnumerateActiveAudioProcessesWithDiagnostics(ShowAllAudioSessions);
+                    _dq?.TryEnqueue(() => SyncAudioProcessEnumeration(enumeration));
                 }
                 catch (Exception ex)
                 {
@@ -504,6 +521,13 @@ public sealed partial class MainViewModel : ObservableObject
                 try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { break; }
             }
         }, ct);
+    }
+
+    private void SyncAudioProcessEnumeration(AudioProcessEnumerationResult enumeration)
+    {
+        LastAudioProcessEnumeration = enumeration;
+        SyncAudioProcesses(enumeration.Processes);
+        UpdateAudioProcessStatus(enumeration);
     }
 
     // Diffs the incoming list against AudioProcesses and adds/removes
@@ -529,6 +553,67 @@ public sealed partial class MainViewModel : ObservableObject
             var previous = AudioProcesses.FirstOrDefault(p => string.Equals(p.Name, Settings.LastProcessName, StringComparison.OrdinalIgnoreCase));
             if (previous != null)
                 SelectedProcess = previous;
+        }
+
+        StartCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(SourceStatusLabel));
+    }
+
+    private void UpdateAudioProcessStatus(AudioProcessEnumerationResult enumeration)
+    {
+        if (!string.IsNullOrWhiteSpace(enumeration.LastError))
+        {
+            AudioProcessStatus = $"Could not read app audio sessions: {enumeration.LastError}";
+            return;
+        }
+
+        if (enumeration.TotalSessions == 0)
+        {
+            AudioProcessStatus = "No Windows audio sessions found. Start playback in the app, wait a few seconds, or use Whole system.";
+            return;
+        }
+
+        if (enumeration.Kept == 0 && enumeration.FilteredSkipped > 0 && !enumeration.IncludeFilteredSessions)
+        {
+            AudioProcessStatus = $"Found {FormatCount(enumeration.TotalSessions, "audio session")}, but none matched the app filter. Try Refresh apps or enable Show all audio sessions.";
+            return;
+        }
+
+        if (enumeration.Kept == 0)
+        {
+            AudioProcessStatus = $"Found {FormatCount(enumeration.TotalSessions, "audio session")}, but only system, expired, or RoomRelay sessions were available.";
+            return;
+        }
+
+        var mode = enumeration.IncludeFilteredSessions ? " including advanced entries" : "";
+        AudioProcessStatus = $"Found {FormatCount(enumeration.Kept, "app audio session")}{mode}.";
+    }
+
+    private static string FormatCount(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    [RelayCommand]
+    public async Task RefreshAudioProcessesAsync()
+    {
+        try
+        {
+            var includeFiltered = ShowAllAudioSessions;
+            var enumeration = await Task.Run(() => ProcessLoopbackSource.EnumerateActiveAudioProcessesWithDiagnostics(includeFiltered));
+            SyncAudioProcessEnumeration(enumeration);
+            Log.Information(
+                "Audio process refresh: endpoints={Endpoints}, sessions={Sessions}, system={System}, filtered={Filtered}, self={Self}, expired={Expired}, kept={Kept}, includeFiltered={IncludeFiltered}",
+                enumeration.EndpointsScanned,
+                enumeration.TotalSessions,
+                enumeration.SystemSkipped,
+                enumeration.FilteredSkipped,
+                enumeration.SelfSkipped,
+                enumeration.ExpiredSkipped,
+                enumeration.Kept,
+                enumeration.IncludeFilteredSessions);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to refresh audio processes");
+            AudioProcessStatus = $"Could not refresh app audio sessions: {ex.Message}";
         }
     }
 
@@ -612,9 +697,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         try
         {
-            var procs = ProcessLoopbackSource.EnumerateActiveAudioProcesses();
-            SyncAudioProcesses(procs);
-            Log.Information("Found {Count} active audio process(es)", procs.Count);
+            var enumeration = ProcessLoopbackSource.EnumerateActiveAudioProcessesWithDiagnostics(ShowAllAudioSessions);
+            SyncAudioProcessEnumeration(enumeration);
+            Log.Information("Found {Count} active audio process(es)", enumeration.Kept);
         }
         catch (Exception ex)
         {
@@ -706,6 +791,13 @@ public sealed partial class MainViewModel : ObservableObject
             _core.SetSource(selection, process);
         }
         catch (Exception ex) { Log.Warning(ex, "Cannot change source"); }
+    }
+
+    [RelayCommand]
+    public void UseWholeSystemSource()
+    {
+        IsProcessSourceSelected = false;
+        SelectSource(AudioSourceSelection.WholeSystem);
     }
 
     [RelayCommand]
@@ -968,7 +1060,12 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
-            var package = _diagnostics.CreatePackage(_core, Pipeline, Settings, string.IsNullOrWhiteSpace(ErrorMessage) ? null : ErrorMessage);
+            var package = _diagnostics.CreatePackage(
+                _core,
+                Pipeline,
+                Settings,
+                string.IsNullOrWhiteSpace(ErrorMessage) ? null : ErrorMessage,
+                LastAudioProcessEnumeration);
             DiagnosticsStatus = $"Diagnostics package created: {package}";
             Log.Information("Diagnostics package created at {Path}", package);
             _diagnostics.OpenDiagnosticsPackage(package);

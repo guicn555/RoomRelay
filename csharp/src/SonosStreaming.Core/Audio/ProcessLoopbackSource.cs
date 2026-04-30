@@ -9,6 +9,20 @@ namespace SonosStreaming.Core.Audio;
 
 public sealed record AudioProcess(int Pid, string Name, string DisplayName);
 
+public sealed record AudioProcessEnumerationResult
+{
+    public List<AudioProcess> Processes { get; init; } = new();
+    public int EndpointsScanned { get; init; }
+    public int TotalSessions { get; init; }
+    public int ExpiredSkipped { get; init; }
+    public int SelfSkipped { get; init; }
+    public int SystemSkipped { get; init; }
+    public int FilteredSkipped { get; init; }
+    public bool IncludeFilteredSessions { get; init; }
+    public string? LastError { get; init; }
+    public int Kept => Processes.Count;
+}
+
 public enum ProcessLoopbackMode
 {
     IncludeProcessTree,
@@ -229,13 +243,19 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
     [DllImport("Ole32.dll", ExactSpelling = true)]
     private static extern int CoCreateInstance(in Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, in Guid riid, out IntPtr ppv);
 
-    public static unsafe List<AudioProcess> EnumerateActiveAudioProcesses()
+    public static List<AudioProcess> EnumerateActiveAudioProcesses() =>
+        EnumerateActiveAudioProcessesWithDiagnostics(includeFilteredSessions: false).Processes;
+
+    public static unsafe AudioProcessEnumerationResult EnumerateActiveAudioProcessesWithDiagnostics(bool includeFilteredSessions = false)
     {
         var result = new List<AudioProcess>();
         int totalSessions = 0;
         int expiredSkipped = 0;
-        int systemPidSkipped = 0;
+        int selfSkipped = 0;
+        int systemSkipped = 0;
+        int filteredSkipped = 0;
         int endpointsScanned = 0;
+        string? lastError = null;
         try
         {
             int hr = CoCreateInstance(CLSID_MMDeviceEnumerator, IntPtr.Zero, 1u, IID_IMMDeviceEnumerator, out var pEnum);
@@ -273,12 +293,12 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                                             var control2 = (IAudioSessionControl2)session;
                                             control2.GetProcessId(out var pidU);
                                             int pid = (int)pidU;
-                                            if (pid == 0) { systemPidSkipped++; continue; }
+                                            if (pid == 0) { systemSkipped++; continue; }
 
                                             AudioSessionState state;
                                             session.GetState(&state);
                                             if (state == AudioSessionState.AudioSessionStateExpired) { expiredSkipped++; continue; }
-                                            if (pid == Environment.ProcessId) { continue; }
+                                            if (pid == Environment.ProcessId) { selfSkipped++; continue; }
 
                                             string? sessionName = null;
                                             try
@@ -294,13 +314,22 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                                             catch { }
 
                                             var (processName, friendlyName) = GetProcessLabels(pid);
-                                            if (!IsUserFacingProcess(pid, processName, sessionName, friendlyName))
+                                            if (IsHardSystemProcess(pid, processName))
                                             {
-                                                systemPidSkipped++;
-                                                Log.Verbose("Skipping audio session pid={Pid} process={Process} session={Session} friendly={Friendly}",
+                                                systemSkipped++;
+                                                Log.Verbose("Skipping system audio session pid={Pid} process={Process} session={Session} friendly={Friendly}",
                                                     pid, processName ?? "n/a", sessionName ?? "n/a", friendlyName ?? "n/a");
                                                 continue;
                                             }
+
+                                            if (!includeFilteredSessions && !IsUserFacingProcess(pid, processName, sessionName, friendlyName))
+                                            {
+                                                filteredSkipped++;
+                                                Log.Verbose("Filtering audio session pid={Pid} process={Process} session={Session} friendly={Friendly}",
+                                                    pid, processName ?? "n/a", sessionName ?? "n/a", friendlyName ?? "n/a");
+                                                continue;
+                                            }
+
                                             string displayName = !string.IsNullOrEmpty(sessionName)
                                                 ? sessionName
                                                 : (friendlyName ?? processName ?? $"pid {pid}");
@@ -323,23 +352,39 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         }
         catch (Exception ex)
         {
+            lastError = ex.Message;
             Log.Warning(ex, "Failed to enumerate audio sessions");
         }
 
         var deduped = result.DistinctBy(p => p.Pid).OrderBy(p => p.DisplayName).ToList();
-        Log.Debug("Audio sessions: {Endpoints} endpoints, {Total} total sessions, {SysSkip} system, {ExpSkip} expired, {Kept} kept",
-            endpointsScanned, totalSessions, systemPidSkipped, expiredSkipped, deduped.Count);
-        return deduped;
+        Log.Debug("Audio sessions: {Endpoints} endpoints, {Total} total sessions, {SysSkip} system, {FilteredSkip} filtered, {SelfSkip} self, {ExpSkip} expired, {Kept} kept, includeFiltered={IncludeFiltered}",
+            endpointsScanned, totalSessions, systemSkipped, filteredSkipped, selfSkipped, expiredSkipped, deduped.Count, includeFilteredSessions);
+        return new AudioProcessEnumerationResult
+        {
+            Processes = deduped,
+            EndpointsScanned = endpointsScanned,
+            TotalSessions = totalSessions,
+            ExpiredSkipped = expiredSkipped,
+            SelfSkipped = selfSkipped,
+            SystemSkipped = systemSkipped,
+            FilteredSkipped = filteredSkipped,
+            IncludeFilteredSessions = includeFilteredSessions,
+            LastError = lastError,
+        };
     }
 
-    private static readonly string[] SystemProcessNames = new[]
+    private static readonly string[] HardSystemProcessNames = new[]
     {
         // Windows core
         "svchost", "csrss", "smss", "services", "lsass", "wininit", "winlogon",
         "dwm", "fontdrvhost", "conhost", "sihost", "taskhostw", "backgroundtaskhost",
         "runtimebroker", "dllhost", "wmiprvse", "searchindexer", "securityhealthservice",
         "ctfmon", "spoolsv", "audiodg", "musnotify", "wlanext", "vpnclient",
-        "searchhost", "textinputhost", "shellexperiencehost", "startmenuexperiencehost",
+        "searchhost", "textinputhost", "shellexperiencehost", "startmenuexperiencehost"
+    };
+
+    private static readonly string[] DefaultHiddenProcessNames = new[]
+    {
         // Terminals / shells
         "windowsterminal", "wt", "cmd", "powershell", "pwsh",
         // IDEs / dev tools
@@ -370,24 +415,11 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
     {
         if (string.IsNullOrEmpty(processName)) return false;
         if (IsKnownMediaProcess(processName) || IsKnownMediaLabel(sessionName) || IsKnownMediaLabel(friendlyName)) return true;
-        if (SystemProcessNames.Contains(processName, StringComparer.OrdinalIgnoreCase)) return false;
+        if (DefaultHiddenProcessNames.Contains(processName, StringComparer.OrdinalIgnoreCase)) return false;
 
         try
         {
             using var proc = Process.GetProcessById(pid);
-
-            // If the executable lives under C:\Windows it's a system component.
-            try
-            {
-                var path = proc.MainModule?.FileName;
-                if (!string.IsNullOrEmpty(path))
-                {
-                    var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-                    if (path.StartsWith(windows, StringComparison.OrdinalIgnoreCase))
-                        return false;
-                }
-            }
-            catch { /* Access denied to MainModule for protected processes — fall through */ }
 
             // A user-facing app typically has a visible main window.
             if (proc.MainWindowHandle != IntPtr.Zero) return true;
@@ -396,6 +428,26 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
             if (!string.IsNullOrWhiteSpace(proc.MainWindowTitle)) return true;
 
             return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsHardSystemProcess(int pid, string? processName)
+    {
+        if (string.IsNullOrEmpty(processName)) return false;
+        if (HardSystemProcessNames.Contains(processName, StringComparer.OrdinalIgnoreCase)) return true;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            var path = proc.MainModule?.FileName;
+            if (string.IsNullOrEmpty(path)) return false;
+
+            var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+            return path.StartsWith(windows, StringComparison.OrdinalIgnoreCase);
         }
         catch
         {
