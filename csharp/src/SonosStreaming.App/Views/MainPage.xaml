@@ -108,7 +108,7 @@
             CloseButtonClick="ErrorInfoBar_CloseButtonClick" />
 
         <!-- Left panel -->
-        <ScrollViewer Grid.Row="2" Grid.Column="0" VerticalScrollMode="Auto">
+        <ScrollViewer x:Name="LeftPaneScrollViewer" Grid.Row="2" Grid.Column="0" VerticalScrollMode="Auto">
             <StackPanel Spacing="16">
 
                 <!-- Speakers -->
@@ -221,14 +221,34 @@
                         <RadioButton x:Name="WholeSystemRadio" Content="Whole system" GroupName="Source" IsChecked="{x:Bind ViewModel.IsWholeSystemSourceSelected, Mode=OneWay}" Checked="WholeSystemRadio_Checked" />
                         <RadioButton x:Name="ProcessRadio" Content="Per application" GroupName="Source" IsChecked="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}" Checked="ProcessRadio_Checked" />
                         <TextBlock Text="Per-application capture uses Windows process loopback and works best on current Windows 11 builds. Use Whole system if an app does not appear or cannot start." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <ComboBox
-                            ItemsSource="{x:Bind ViewModel.AudioProcesses, Mode=OneWay}"
-                            SelectedItem="{x:Bind ViewModel.SelectedProcess, Mode=TwoWay}"
-                            DisplayMemberPath="DisplayName"
-                            PlaceholderText="Select application"
-                            IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}"
-                            MaxHeight="200"
-                            HorizontalAlignment="Stretch" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox
+                                ItemsSource="{x:Bind ViewModel.AudioProcesses, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedProcess, Mode=TwoWay}"
+                                DisplayMemberPath="DisplayName"
+                                PlaceholderText="Select application"
+                                IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}"
+                                MaxHeight="200"
+                                HorizontalAlignment="Stretch" />
+                            <Button
+                                Grid.Column="1"
+                                Content="Refresh apps"
+                                Command="{x:Bind ViewModel.RefreshAudioProcessesCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}" />
+                        </Grid>
+                        <CheckBox
+                            Content="Show all audio sessions"
+                            IsChecked="{x:Bind ViewModel.ShowAllAudioSessions, Mode=TwoWay}"
+                            IsEnabled="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind ViewModel.AudioProcessStatus, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button
+                            Content="Use whole system instead"
+                            Command="{x:Bind ViewModel.UseWholeSystemSourceCommand}"
+                            Visibility="{x:Bind ViewModel.IsProcessSourceSelected, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}" />
                         <TextBlock Text="{x:Bind ViewModel.SourceStatusLabel, Mode=OneWay}" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         <TextBlock Text="Format" Margin="0,8,0,0" />
                         <TextBlock Text="AAC is the stable default with Sonos buffering latency. LPCM is lower-latency, high-bandwidth, and experimental." TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -285,7 +305,7 @@
         </ScrollViewer>
 
         <!-- Right panel -->
-        <ScrollViewer Grid.Row="2" Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
+        <ScrollViewer x:Name="RightPaneScrollViewer" Grid.Row="2" Grid.Column="2" VerticalScrollMode="Auto" HorizontalScrollMode="Disabled">
             <StackPanel Spacing="16">
 
                 <!-- Levels -->

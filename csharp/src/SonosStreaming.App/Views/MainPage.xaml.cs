@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using SonosStreaming.App.ViewModels;
 using SonosStreaming.Core.Audio;
 using SonosStreaming.Core.State;
@@ -16,7 +18,35 @@ public sealed partial class MainPage : Page
         ViewModel = App.Current.Services.GetRequiredService<MainViewModel>();
         DataContext = ViewModel;
         InitializeComponent();
+        LeftPaneScrollViewer.AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPanePointerWheelChanged), true);
+        RightPaneScrollViewer.AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPanePointerWheelChanged), true);
         Loaded += async (_, _) => await ViewModel.RescanCommand.ExecuteAsync(null);
+    }
+
+    private void OnPanePointerWheelChanged(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not ScrollViewer scrollViewer) return;
+        if (IsInsideOpenComboBox(e.OriginalSource as DependencyObject)) return;
+
+        var delta = e.GetCurrentPoint(scrollViewer).Properties.MouseWheelDelta;
+        if (delta == 0) return;
+
+        var targetOffset = Math.Clamp(scrollViewer.VerticalOffset - delta, 0, scrollViewer.ScrollableHeight);
+        if (Math.Abs(targetOffset - scrollViewer.VerticalOffset) < 0.1) return;
+
+        scrollViewer.ChangeView(null, targetOffset, null, disableAnimation: true);
+        e.Handled = true;
+    }
+
+    private static bool IsInsideOpenComboBox(DependencyObject? source)
+    {
+        for (var current = source; current != null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (current is ComboBox { IsDropDownOpen: true })
+                return true;
+        }
+
+        return false;
     }
 
     private void WholeSystemRadio_Checked(object sender, RoutedEventArgs e)

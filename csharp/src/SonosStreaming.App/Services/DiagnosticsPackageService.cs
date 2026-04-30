@@ -4,6 +4,7 @@ using System.Net.NetworkInformation;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
+using SonosStreaming.Core.Audio;
 using SonosStreaming.Core.Pipeline;
 using SonosStreaming.Core.State;
 
@@ -27,7 +28,12 @@ public sealed class DiagnosticsPackageService
         }
     }
 
-    public string CreatePackage(AppCore core, PipelineRunner pipeline, AppSettings settings, string? lastError)
+    public string CreatePackage(
+        AppCore core,
+        PipelineRunner pipeline,
+        AppSettings settings,
+        string? lastError,
+        AudioProcessEnumerationResult? audioProcessEnumeration = null)
     {
         Directory.CreateDirectory(AppDataDir);
         Directory.CreateDirectory(DiagnosticsDir);
@@ -39,7 +45,7 @@ public sealed class DiagnosticsPackageService
         using var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create);
         AddLogs(archive);
         AddFileIfExists(archive, Path.Combine(AppDataDir, "crash.txt"), "crash.txt");
-        AddText(archive, "diagnostics.txt", BuildDiagnostics(core, pipeline, settings, lastError));
+        AddText(archive, "diagnostics.txt", BuildDiagnostics(core, pipeline, settings, lastError, audioProcessEnumeration));
 
         return zipPath;
     }
@@ -81,7 +87,12 @@ public sealed class DiagnosticsPackageService
         writer.Write(contents);
     }
 
-    private static string BuildDiagnostics(AppCore core, PipelineRunner pipeline, AppSettings settings, string? lastError)
+    private static string BuildDiagnostics(
+        AppCore core,
+        PipelineRunner pipeline,
+        AppSettings settings,
+        string? lastError,
+        AudioProcessEnumerationResult? audioProcessEnumeration)
     {
         var selection = core.Selection;
         var sb = new StringBuilder();
@@ -113,6 +124,27 @@ public sealed class DiagnosticsPackageService
         sb.AppendLine($"Process preferences: {settings.ProcessPreferences.Count}");
         foreach (var pref in settings.ProcessPreferences)
             sb.AppendLine($"- {pref.ProcessName}: {pref.StreamingFormat}, {pref.LatencyMode}");
+        sb.AppendLine();
+        sb.AppendLine("Audio Process Enumeration");
+        if (audioProcessEnumeration == null)
+        {
+            sb.AppendLine("Last enumeration: n/a");
+        }
+        else
+        {
+            sb.AppendLine($"Include filtered sessions: {audioProcessEnumeration.IncludeFilteredSessions}");
+            sb.AppendLine($"Endpoints scanned: {audioProcessEnumeration.EndpointsScanned}");
+            sb.AppendLine($"Total sessions: {audioProcessEnumeration.TotalSessions}");
+            sb.AppendLine($"Expired skipped: {audioProcessEnumeration.ExpiredSkipped}");
+            sb.AppendLine($"Self skipped: {audioProcessEnumeration.SelfSkipped}");
+            sb.AppendLine($"System skipped: {audioProcessEnumeration.SystemSkipped}");
+            sb.AppendLine($"Filtered skipped: {audioProcessEnumeration.FilteredSkipped}");
+            sb.AppendLine($"Kept: {audioProcessEnumeration.Kept}");
+            sb.AppendLine($"Last error: {audioProcessEnumeration.LastError ?? "n/a"}");
+            foreach (var process in audioProcessEnumeration.Processes)
+                sb.AppendLine($"- {process.DisplayName} ({process.Name}, pid={process.Pid})");
+        }
+        sb.AppendLine();
         sb.AppendLine($"Clients: {pipeline.ClientCount}");
         sb.AppendLine($"Local stream IP: {pipeline.CurrentLocalIp?.ToString() ?? "n/a"}");
         sb.AppendLine($"Stream URL: {pipeline.CurrentStreamUrl ?? "n/a"}");
