@@ -1,6 +1,6 @@
 # AGENTS.md
 
-RoomRelay is a Windows-only .NET 9 / WinUI 3 application that captures
+RoomRelay is a Windows-only .NET 10 / WinUI 3 application that captures
 system audio via WASAPI loopback and streams it to Sonos speakers as AAC-LC
 over HTTP.
 

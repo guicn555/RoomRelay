@@ -8,6 +8,7 @@ obj/
 # IDE / Tooling
 .idea/
 .vscode/
+.dotnet10/
 TestResults/
 
 # OS

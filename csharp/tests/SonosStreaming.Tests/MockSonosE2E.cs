@@ -136,9 +136,10 @@ public class MockSonosE2E : IDisposable
     [Fact]
     public async Task SonosController_GetVolumeAsync_ReadsCurrentVolume()
     {
+        var ct = TestContext.Current.CancellationToken;
         var device = new SonosDevice("Test", IPAddress.Loopback, (ushort)_port, "uuid:TEST");
 
-        var volume = await new SonosController().GetVolumeAsync(device);
+        var volume = await new SonosController().GetVolumeAsync(device, ct);
 
         volume.Should().Be(37);
     }

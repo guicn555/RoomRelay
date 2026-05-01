@@ -56,15 +56,16 @@ public class SsdpParserTests
     [Fact]
     public async Task LookupAsync_FetchesDeviceDescriptionFromCustomPort()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
         var serverTask = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await listener.AcceptTcpClientAsync(ct);
             await using var stream = client.GetStream();
             var buffer = new byte[2048];
-            _ = await stream.ReadAsync(buffer);
+            _ = await stream.ReadAsync(buffer, ct);
 
             var xml = "<?xml version=\"1.0\"?><root><device><friendlyName>Office</friendlyName><UDN>uuid:RINCON_TEST01400</UDN></device></root>";
             var body = Encoding.UTF8.GetBytes(xml);
@@ -72,12 +73,12 @@ public class SsdpParserTests
                 "HTTP/1.1 200 OK\r\n" +
                 $"Content-Length: {body.Length}\r\n" +
                 "Content-Type: text/xml\r\n\r\n");
-            await stream.WriteAsync(header);
-            await stream.WriteAsync(body);
-        });
+            await stream.WriteAsync(header, ct);
+            await stream.WriteAsync(body, ct);
+        }, ct);
 
         using var discovery = new SsdpDiscovery();
-        var device = await discovery.LookupAsync(IPAddress.Loopback, port);
+        var device = await discovery.LookupAsync(IPAddress.Loopback, port, ct);
 
         device.FriendlyName.Should().Be("Office");
         device.Udn.Should().Be("uuid:RINCON_TEST01400");
@@ -89,15 +90,16 @@ public class SsdpParserTests
     [Fact]
     public async Task LookupAsync_RejectsNonSonosUdn()
     {
+        var ct = TestContext.Current.CancellationToken;
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var port = (ushort)((IPEndPoint)listener.LocalEndpoint).Port;
         var serverTask = Task.Run(async () =>
         {
-            using var client = await listener.AcceptTcpClientAsync();
+            using var client = await listener.AcceptTcpClientAsync(ct);
             await using var stream = client.GetStream();
             var buffer = new byte[2048];
-            _ = await stream.ReadAsync(buffer);
+            _ = await stream.ReadAsync(buffer, ct);
 
             var xml = "<?xml version=\"1.0\"?><root><device><friendlyName>Hue Bridge</friendlyName><UDN>uuid:SomeOtherDevice-1234</UDN></device></root>";
             var body = Encoding.UTF8.GetBytes(xml);
@@ -105,12 +107,12 @@ public class SsdpParserTests
                 "HTTP/1.1 200 OK\r\n" +
                 $"Content-Length: {body.Length}\r\n" +
                 "Content-Type: text/xml\r\n\r\n");
-            await stream.WriteAsync(header);
-            await stream.WriteAsync(body);
-        });
+            await stream.WriteAsync(header, ct);
+            await stream.WriteAsync(body, ct);
+        }, ct);
 
         using var discovery = new SsdpDiscovery();
-        var act = () => discovery.LookupAsync(IPAddress.Loopback, port);
+        var act = () => discovery.LookupAsync(IPAddress.Loopback, port, ct);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*not a Sonos speaker*");
         await serverTask;
     }

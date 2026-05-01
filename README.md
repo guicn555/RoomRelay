@@ -264,9 +264,9 @@ WinUI 3 window with Mica backdrop and declarative XAML UI:
 
 ### Prerequisites
 
-- **.NET 9 SDK** (9.0.313 or later).
-- **Windows App Runtime 1.8** framework package (pre-installed on most
-  Windows 11; run `Get-AppxPackage *WindowsAppRuntime.1.8*` to check).
+- **.NET 10 SDK**.
+- **Windows App Runtime 2.0** framework package (run
+  `Get-AppxPackage *WindowsAppRuntime.2.0*` to check).
 - That's it — no extra DLLs to drop in.
 
 ### Build & run
@@ -285,7 +285,7 @@ the network profile where your Sonos lives so it can fetch the stream.
 ```
 csharp/
   SonosStreaming.sln
-  Directory.Build.props        # net9.0-windows, x64, unsafe, C# preview
+  Directory.Build.props        # net10.0-windows, x64, unsafe, C# preview
   src/
     SonosStreaming.Core/        # audio, network, DSP, pipeline
       Audio/                    # WASAPI capture, MF encoder, resampler, DSP
