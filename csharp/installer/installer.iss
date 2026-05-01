@@ -3,10 +3,18 @@
 ; Compile with: iscc installer.iss
 
 #define MyAppName "RoomRelay"
-#define MyAppVersion "1.0.7"
+#define MyAppVersion "1.0.8"
 #define MyAppPublisher "guicn555"
 #define MyAppURL "https://github.com/guicn555/RoomRelay"
 #define MyAppExeName "RoomRelay.exe"
+
+#ifndef PublishDir
+#define PublishDir "RoomRelay-v1.0.8-win-x64-full"
+#endif
+
+#ifndef ArtifactSuffix
+#define ArtifactSuffix "win-x64-full"
+#endif
 
 [Setup]
 AppId={{E2A3F4C5-6B7D-4E8F-9A0B-1C2D3E4F5A6B}
@@ -19,7 +27,7 @@ AppUpdatesURL={#MyAppURL}/releases
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputBaseFilename=RoomRelay-Setup-{#MyAppVersion}
+OutputBaseFilename=RoomRelay-Setup-{#MyAppVersion}-{#ArtifactSuffix}
 OutputDir=..
 SetupIconFile=..\src\SonosStreaming.App\Assets\sonos-streaming.ico
 Compression=lzma2
@@ -34,7 +42,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\publish\RoomRelay-v1.0.7\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "..\publish\{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
