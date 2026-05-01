@@ -135,19 +135,20 @@ public class StreamServerTests
     [Fact]
     public async Task PcmRangeRequest_ReturnsRangeNotSatisfiable()
     {
+        var ct = TestContext.Current.CancellationToken;
         var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
         var server = new StreamServer(broadcast, 0, StreamingFormat.WavPcm, IPAddress.Loopback);
         server.Start();
         try
         {
             using var client = new TcpClient();
-            await client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint.Port);
+            await client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint.Port, ct);
             await using var stream = client.GetStream();
             var request = Encoding.ASCII.GetBytes($"GET {server.StreamPath} HTTP/1.0\r\nHost: localhost\r\nRange: bytes=1024-\r\n\r\n");
-            await stream.WriteAsync(request);
+            await stream.WriteAsync(request, ct);
 
             var buffer = new byte[512];
-            var read = await stream.ReadAsync(buffer);
+            var read = await stream.ReadAsync(buffer, ct);
             var response = Encoding.ASCII.GetString(buffer, 0, read);
 
             response.Should().StartWith("HTTP/1.0 416 Range Not Satisfiable");

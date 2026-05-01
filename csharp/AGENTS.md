@@ -1,10 +1,10 @@
-# AGENTS.md — C# / .NET 9 WinUI3 RoomRelay
+# AGENTS.md — C# / .NET 10 WinUI3 RoomRelay
 
 Guidance for working in the C# implementation.
 
 ## What this is
 
-Windows-only .NET 9 / WinUI 3 desktop app that:
+Windows-only .NET 10 / WinUI 3 desktop app that:
 
 - Captures system audio via WASAPI loopback (raw CsWin32; no NAudio).
 - Resamples / converts to 48 kHz s16 stereo (pure C# pass-through when the
@@ -35,13 +35,13 @@ dotnet test                                   # run unit + integration tests
 ```
 
 **Prerequisites:**
-- .NET 9 SDK (9.0.313 or later).
-- Windows App Runtime 1.8 framework package (pre-installed on most Windows 11;
-  run `Get-AppxPackage *WindowsAppRuntime.1.8*` to check).
+- .NET 10 SDK.
+- Windows App Runtime 2.0 framework package (run
+  `Get-AppxPackage *WindowsAppRuntime.2.0*` to check).
 
 The project uses **framework-dependent** deployment (`WindowsAppSDKSelfContained=false`,
 `WindowsPackageType=None`) with a **custom `Program.cs`** entry point (`DISABLE_XAML_GENERATED_MAIN`).
-The Windows App Runtime is resolved via `Bootstrap.Initialize(0x00010008)` at
+The Windows App Runtime is resolved via `Bootstrap.Initialize(0x00020000)` at
 startup — this must happen before any WinUI types are touched.
 
 The app binds `0.0.0.0:8000` and sends SSDP multicast on first scan — a firewall
@@ -52,7 +52,7 @@ prompt is expected on first run.
 ```
 csharp/
   SonosStreaming.sln
-  Directory.Build.props                  # shared: net9.0-win, x64, unsafe, C# preview
+  Directory.Build.props                  # shared: net10.0-win, x64, unsafe, C# preview
   src/
     SonosStreaming.Core/                  # .NET library — audio, network, state, pipeline
       NativeMethods.txt                   # CsWin32 bindings list (Core)
@@ -155,7 +155,7 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
 
 ## Key decisions & gotchas
 
-1. **WinUI 3 unpackaged bootstrap.** Call `Bootstrap.Initialize(0x00010008)`
+1. **WinUI 3 unpackaged bootstrap.** Call `Bootstrap.Initialize(0x00020000)`
    **before** any WinUI types are used, and create `new App()` **inside**
    the `Application.Start` callback (creating it before causes
    `RPC_E_WRONG_THREAD`). The generated `ApplicationConfiguration.Initialize()`
@@ -168,7 +168,7 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
    initializes the system runtime, two copies load in the same process and
    trigger a native FailFast at `Application.Start`. Use
    `WindowsAppSDKSelfContained=false` and rely on the system-installed
-   Windows App Runtime 1.8 framework package.
+   Windows App Runtime 2.0 framework package.
 
 3. **MF AAC encoder needs payload type 1 for ADTS.** The MFT can emit raw
    AAC (no framing) or ADTS. Sonos requires ADTS over HTTP, so we set
@@ -421,22 +421,22 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
 
 | Package                                 | Version          |
 |-----------------------------------------|------------------|
-| Microsoft.WindowsAppSDK                 | 1.8.260416003    |
-| CommunityToolkit.Mvvm                   | 8.4.0            |
-| H.NotifyIcon.WinUI                      | 2.2.0            |
-| Microsoft.Graphics.Win2D                | 1.3.1            |
+| Microsoft.WindowsAppSDK                 | 2.0.1            |
+| CommunityToolkit.Mvvm                   | 8.4.2            |
+| H.NotifyIcon.WinUI                      | 2.4.1            |
+| Microsoft.Graphics.Win2D                | 1.4.0            |
 | MathNet.Numerics                        | 5.0.0            |
-| Serilog                                 | 4.2.0            |
-| Serilog.Sinks.File                      | 6.0.0            |
-| Microsoft.Extensions.DependencyInjection | 9.0.0           |
-| Microsoft.Windows.CsWin32               | 0.3.162          |
-| System.Text.Json                        | 9.0.0            |
+| Serilog                                 | 4.3.1            |
+| Serilog.Sinks.File                      | 7.0.0            |
+| Microsoft.Extensions.DependencyInjection | 10.0.7          |
+| Microsoft.Windows.CsWin32               | 0.3.275          |
 
 ## Coding conventions
 
 - `Serilog` for logs; exceptions propagate naturally.
 - Windows-specific code in Core is not gated behind `#if WINDOWS` — the
-  whole project targets `net9.0-windows10.0.19041.0`.
+  whole project targets `net10.0-windows10.0.26100.0` with
+  `SupportedOSPlatformVersion=10.0.19041.0`.
 - `unsafe` blocks are allowed (`AllowUnsafeBlocks=true`) for COM and
   Media Foundation interop. Prefer marking individual methods `unsafe`
   rather than the whole class so `await` can still be used elsewhere
@@ -447,5 +447,5 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
   validation and hot reload support. Only custom controls built from
   primitives use imperative C#.
 - `.ConfigureAwait(false)` on every `await` in `SonosStreaming.Core`.
-- Prefer `Lock` over `object` for mutual exclusion (C# 13 `lock` statement
+- Prefer `Lock` over `object` for mutual exclusion (C# 14 `lock` statement
   works with both).

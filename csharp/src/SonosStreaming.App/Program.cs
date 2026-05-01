@@ -37,7 +37,7 @@ public static class Program
         ShowWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
 
 #if !WINDOWS_APP_SDK_SELF_CONTAINED
-        Bootstrap.Initialize(0x00010008);
+        Bootstrap.Initialize(0x00020000);
 #endif
         WinRT.ComWrappersSupport.InitializeComWrappers();
 
