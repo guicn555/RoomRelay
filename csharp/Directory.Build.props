@@ -8,10 +8,10 @@
     <LangVersion>preview</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Version>1.0.8</Version>
-    <FileVersion>1.0.8.0</FileVersion>
-    <AssemblyVersion>1.0.8.0</AssemblyVersion>
-    <InformationalVersion>1.0.8</InformationalVersion>
+    <Version>1.0.9</Version>
+    <FileVersion>1.0.9.0</FileVersion>
+    <AssemblyVersion>1.0.9.0</AssemblyVersion>
+    <InformationalVersion>1.0.9</InformationalVersion>
     <Company>guicn555</Company>
   </PropertyGroup>
 </Project>
