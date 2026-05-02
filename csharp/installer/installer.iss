@@ -3,13 +3,13 @@
 ; Compile with: iscc installer.iss
 
 #define MyAppName "RoomRelay"
-#define MyAppVersion "1.0.8"
+#define MyAppVersion "1.0.9"
 #define MyAppPublisher "guicn555"
 #define MyAppURL "https://github.com/guicn555/RoomRelay"
 #define MyAppExeName "RoomRelay.exe"
 
 #ifndef PublishDir
-#define PublishDir "RoomRelay-v1.0.8-win-x64-full"
+#define PublishDir "RoomRelay-v1.0.9-win-x64-full"
 #endif
 
 #ifndef ArtifactSuffix
