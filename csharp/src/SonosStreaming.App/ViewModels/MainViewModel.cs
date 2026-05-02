@@ -269,6 +269,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         Pipeline.PumpCrashed += OnPumpCrashed;
         Pipeline.FormatChanged += OnFormatChanged;
+        Pipeline.NoClientConnected += OnNoClientConnected;
         _allowSonosVolumeApply = true;
     }
 
@@ -286,6 +287,18 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnClientCountChanged(int value)
     {
         OnPropertyChanged(nameof(ClientStatusLabel));
+    }
+
+    private void OnNoClientConnected(object? sender, EventArgs e)
+    {
+        var streamUrl = Pipeline.CurrentStreamUrl ?? "the RoomRelay stream URL";
+        var message = $"The selected Sonos room has not connected to {streamUrl}. Allow RoomRelay through Windows Firewall for private networks, then check that the PC and speaker are on the same reachable LAN/VLAN.";
+        Log.Warning("No Sonos client connected warning shown: {Message}", message);
+
+        if (_dq != null)
+            _dq.TryEnqueue(() => ShowNotification("Speaker Not Connected", message, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning));
+        else
+            ShowNotification("Speaker Not Connected", message, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning);
     }
 
     partial void OnIsClippingChanged(bool value)

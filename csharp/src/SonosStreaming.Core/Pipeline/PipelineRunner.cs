@@ -66,6 +66,11 @@ public sealed class PipelineRunner : IDisposable
     /// </summary>
     public event EventHandler? FormatChanged;
 
+    /// <summary>
+    /// Raised once when Sonos never opens the HTTP stream after playback starts.
+    /// </summary>
+    public event EventHandler? NoClientConnected;
+
     public PipelineRunner(AppCore core, PipelineOptions? options = null)
     {
         _core = core;
@@ -146,6 +151,8 @@ public sealed class PipelineRunner : IDisposable
 
         _clientCountTask = Task.Run(async () =>
         {
+            var noClientWarningAt = _pipelineStart.AddSeconds(10);
+            var noClientWarningRaised = false;
             while (!token.IsCancellationRequested)
             {
                 try
@@ -156,6 +163,16 @@ public sealed class PipelineRunner : IDisposable
                     {
                         FirstClientAtUtc = DateTime.UtcNow;
                         Log.Information("First Sonos client connected after {Ms:F0} ms", (FirstClientAtUtc.Value - _pipelineStart).TotalMilliseconds);
+                    }
+
+                    if (!noClientWarningRaised && FirstClientAtUtc == null && DateTime.UtcNow >= noClientWarningAt)
+                    {
+                        noClientWarningRaised = true;
+                        Log.Warning("No Sonos client connected after {Ms:F0} ms. The speaker did not fetch {Url}; check Windows Firewall inbound access for RoomRelay, network/VLAN isolation, and that {LocalIp}:8000 is reachable from the speaker.",
+                            (DateTime.UtcNow - _pipelineStart).TotalMilliseconds,
+                            CurrentStreamUrl ?? "the stream URL",
+                            CurrentLocalIp);
+                        NoClientConnected?.Invoke(this, EventArgs.Empty);
                     }
                 }
                 catch (OperationCanceledException) { break; }
