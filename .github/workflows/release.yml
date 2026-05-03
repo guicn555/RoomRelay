@@ -1,0 +1,328 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "csharp/src/**"
+      - "csharp/tests/**"
+      - "csharp/*.sln"
+      - "csharp/*.props"
+      - "csharp/**/*.csproj"
+      - "csharp/installer/**"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  determine-release:
+    name: Determine release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.version.outputs.skip }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      tag_exists: ${{ steps.version.outputs.tag_exists }}
+      bump: ${{ steps.bump.outputs.bump }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine bump
+        id: bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.ref_name }}" != "main" ]]; then
+            echo "Manual releases must be run from the main branch." >&2
+            exit 1
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            bump="${{ inputs.bump }}"
+          else
+            labels="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq '.[0].labels[].name' 2>/dev/null || true)"
+
+            if grep -Fxq "release:none" <<< "$labels"; then
+              bump="none"
+            elif grep -Fxq "release:major" <<< "$labels"; then
+              bump="major"
+            elif grep -Fxq "release:minor" <<< "$labels"; then
+              bump="minor"
+            else
+              bump="patch"
+            fi
+          fi
+
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "Selected release bump: $bump"
+
+      - name: Compute version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.bump.outputs.bump }}" == "none" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "release:none label found; skipping release."
+            exit 0
+          fi
+
+          mapfile -t head_tags < <(git tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname)
+          if [[ ${#head_tags[@]} -gt 0 ]]; then
+            tag="${head_tags[0]}"
+            version="${tag#v}"
+
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Release $tag already exists for this commit; skipping."
+              exit 0
+            fi
+
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "previous_tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Reusing existing tag $tag for release."
+            exit 0
+          fi
+
+          mapfile -t tags < <(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname)
+          previous_tag="${tags[0]:-v0.0.0}"
+          current="${previous_tag#v}"
+          IFS=. read -r major minor patch <<< "$current"
+
+          case "${{ steps.bump.outputs.bump }}" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+            *)
+              echo "Unsupported bump: ${{ steps.bump.outputs.bump }}" >&2
+              exit 1
+              ;;
+          esac
+
+          version="$major.$minor.$patch"
+          tag="v$version"
+
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Computed tag already exists: $tag" >&2
+            exit 1
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+          echo "Computed release $tag from $previous_tag."
+
+  build-test-package:
+    name: Build, test, and package
+    needs: determine-release
+    if: needs.determine-release.outputs.skip != 'true'
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: csharp
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('csharp/SonosStreaming.sln', 'csharp/Directory.Build.props', 'csharp/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Restore
+        run: dotnet restore SonosStreaming.sln
+
+      - name: Build
+        run: |
+          $version = "${{ needs.determine-release.outputs.version }}"
+          $versionProps = @(
+            "/p:Version=$version",
+            "/p:FileVersion=$version.0",
+            "/p:AssemblyVersion=$version.0",
+            "/p:InformationalVersion=$version"
+          )
+
+          dotnet build SonosStreaming.sln -c Release --no-restore -warnaserror @versionProps
+
+      - name: Test
+        run: dotnet test SonosStreaming.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+
+      - name: Publish app variants
+        run: |
+          $version = "${{ needs.determine-release.outputs.version }}"
+          $versionProps = @(
+            "/p:Version=$version",
+            "/p:FileVersion=$version.0",
+            "/p:AssemblyVersion=$version.0",
+            "/p:InformationalVersion=$version"
+          )
+
+          dotnet publish src\SonosStreaming.App\SonosStreaming.App.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o "publish\RoomRelay-v$version-win-x64-full" @versionProps
+          dotnet publish src\SonosStreaming.App\SonosStreaming.App.csproj -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -o "publish\RoomRelay-v$version-win-x64-light" @versionProps
+
+      - name: Build installers
+        run: |
+          $version = "${{ needs.determine-release.outputs.version }}"
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+
+          & $iscc "installer\installer.iss" "/DMyAppVersion=$version" "/DPublishDir=RoomRelay-v$version-win-x64-full" "/DArtifactSuffix=win-x64-full"
+          & $iscc "installer\installer.iss" "/DMyAppVersion=$version" "/DPublishDir=RoomRelay-v$version-win-x64-light" "/DArtifactSuffix=win-x64-light"
+
+      - name: Create ZIP archives and checksums
+        run: |
+          $version = "${{ needs.determine-release.outputs.version }}"
+          $assets = @(
+            "RoomRelay-v$version-win-x64-full.zip",
+            "RoomRelay-v$version-win-x64-light.zip",
+            "RoomRelay-Setup-$version-win-x64-full.exe",
+            "RoomRelay-Setup-$version-win-x64-light.exe"
+          )
+
+          Compress-Archive -Path "publish\RoomRelay-v$version-win-x64-full\*" -DestinationPath $assets[0] -Force
+          Compress-Archive -Path "publish\RoomRelay-v$version-win-x64-light\*" -DestinationPath $assets[1] -Force
+
+          $checksums = foreach ($asset in $assets) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $asset).Hash.ToLowerInvariant()
+            "$hash  $asset"
+          }
+          $checksums | Set-Content -Path SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-${{ needs.determine-release.outputs.tag }}
+          path: |
+            csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-x64-full.zip
+            csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-x64-light.zip
+            csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-x64-full.exe
+            csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-x64-light.exe
+            csharp/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-test-results-${{ needs.determine-release.outputs.tag }}
+          path: csharp/TestResults/**/*.trx
+          if-no-files-found: warn
+
+  publish-release:
+    name: Publish GitHub release
+    needs:
+      - determine-release
+      - build-test-package
+    if: needs.determine-release.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download release assets
+        uses: actions/download-artifact@v7
+        with:
+          name: release-assets-${{ needs.determine-release.outputs.tag }}
+          path: release-assets
+
+      - name: Create tag
+        if: needs.determine-release.outputs.tag_exists != 'true'
+        run: |
+          set -euo pipefail
+          git tag "${{ needs.determine-release.outputs.tag }}" "${GITHUB_SHA}"
+          git push origin "${{ needs.determine-release.outputs.tag }}"
+
+      - name: Create release notes
+        run: |
+          set -euo pipefail
+          previous="${{ needs.determine-release.outputs.previous_tag }}"
+          current="${GITHUB_SHA}"
+
+          {
+            echo "Automated RoomRelay release from commit ${current}."
+            echo
+            echo "## Changes"
+            if [[ "$previous" == "${{ needs.determine-release.outputs.tag }}" ]]; then
+              echo "- Release assets rebuilt for existing tag $previous."
+            else
+              git log --pretty=format:'- %s' "${previous}..${current}"
+              echo
+            fi
+            echo
+            echo "## Assets"
+            echo "- Full installer and ZIP include the app and bundled runtime dependencies."
+            echo "- Light installer and ZIP require the Windows App Runtime to be installed separately."
+          } > release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ needs.determine-release.outputs.tag }}" \
+            release-assets/* \
+            --title "RoomRelay ${{ needs.determine-release.outputs.tag }}" \
+            --notes-file release-notes.md
