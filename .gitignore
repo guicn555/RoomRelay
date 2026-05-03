@@ -23,6 +23,9 @@ csharp/stderr*.txt
 csharp/ffmpeg/
 csharp/publish/
 csharp/release/
+csharp/release-v*/
 csharp/SonosStreaming-Setup-*.exe
 csharp/RoomRelay-Setup-*.exe
+csharp/RoomRelay-v*.zip
+csharp/SHA256SUMS*.txt
 *.log
