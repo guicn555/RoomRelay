@@ -283,7 +283,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download release assets
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-assets-${{ needs.determine-release.outputs.tag }}
           path: release-assets
