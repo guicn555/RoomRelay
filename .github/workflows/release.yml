@@ -215,29 +215,50 @@ jobs:
             "/p:InformationalVersion=$version"
           )
 
-          dotnet publish src\SonosStreaming.App\SonosStreaming.App.csproj -c Release -r win-x64 --self-contained true -p:WindowsAppSDKSelfContained=true -o "publish\RoomRelay-v$version-win-x64-full" @versionProps
-          dotnet publish src\SonosStreaming.App\SonosStreaming.App.csproj -c Release -r win-x64 --self-contained false -p:WindowsAppSDKSelfContained=false -o "publish\RoomRelay-v$version-win-x64-light" @versionProps
+          $variants = @(
+            @{ Rid = "win-x64";   SelfContained = $true;  Suffix = "win-x64-full"   },
+            @{ Rid = "win-x64";   SelfContained = $false; Suffix = "win-x64-light"  },
+            @{ Rid = "win-arm64"; SelfContained = $true;  Suffix = "win-arm64-full" },
+            @{ Rid = "win-arm64"; SelfContained = $false; Suffix = "win-arm64-light"}
+          )
+
+          foreach ($v in $variants) {
+            $sc = $v.SelfContained.ToString().ToLowerInvariant()
+            dotnet publish src\SonosStreaming.App\SonosStreaming.App.csproj -c Release -r $v.Rid --self-contained $sc -p:WindowsAppSDKSelfContained=$sc -o "publish\RoomRelay-v$version-$($v.Suffix)" @versionProps
+            if ($LASTEXITCODE -ne 0) { throw "Publish failed for $($v.Suffix)" }
+          }
 
       - name: Build installers
         run: |
           $version = "${{ needs.determine-release.outputs.version }}"
           $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
 
-          & $iscc "installer\installer.iss" "/DMyAppVersion=$version" "/DPublishDir=RoomRelay-v$version-win-x64-full" "/DArtifactSuffix=win-x64-full"
-          & $iscc "installer\installer.iss" "/DMyAppVersion=$version" "/DPublishDir=RoomRelay-v$version-win-x64-light" "/DArtifactSuffix=win-x64-light"
+          $variants = @(
+            @{ Suffix = "win-x64-full";   Arch = "x64"   },
+            @{ Suffix = "win-x64-light";  Arch = "x64"   },
+            @{ Suffix = "win-arm64-full"; Arch = "arm64" },
+            @{ Suffix = "win-arm64-light";Arch = "arm64" }
+          )
+
+          foreach ($v in $variants) {
+            & $iscc "installer\installer.iss" "/DMyAppVersion=$version" "/DPublishDir=RoomRelay-v$version-$($v.Suffix)" "/DArtifactSuffix=$($v.Suffix)" "/DTargetArch=$($v.Arch)"
+            if ($LASTEXITCODE -ne 0) { throw "ISCC failed for $($v.Suffix)" }
+          }
 
       - name: Create ZIP archives and checksums
         run: |
           $version = "${{ needs.determine-release.outputs.version }}"
-          $assets = @(
-            "RoomRelay-v$version-win-x64-full.zip",
-            "RoomRelay-v$version-win-x64-light.zip",
-            "RoomRelay-Setup-$version-win-x64-full.exe",
-            "RoomRelay-Setup-$version-win-x64-light.exe"
-          )
+          $suffixes = @("win-x64-full", "win-x64-light", "win-arm64-full", "win-arm64-light")
 
-          Compress-Archive -Path "publish\RoomRelay-v$version-win-x64-full\*" -DestinationPath $assets[0] -Force
-          Compress-Archive -Path "publish\RoomRelay-v$version-win-x64-light\*" -DestinationPath $assets[1] -Force
+          $assets = @()
+          foreach ($s in $suffixes) {
+            $zip = "RoomRelay-v$version-$s.zip"
+            Compress-Archive -Path "publish\RoomRelay-v$version-$s\*" -DestinationPath $zip -Force
+            $assets += $zip
+          }
+          foreach ($s in $suffixes) {
+            $assets += "RoomRelay-Setup-$version-$s.exe"
+          }
 
           $checksums = foreach ($asset in $assets) {
             $hash = (Get-FileHash -Algorithm SHA256 -Path $asset).Hash.ToLowerInvariant()
@@ -252,8 +273,12 @@ jobs:
           path: |
             csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-x64-full.zip
             csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-x64-light.zip
+            csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-arm64-full.zip
+            csharp/RoomRelay-v${{ needs.determine-release.outputs.version }}-win-arm64-light.zip
             csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-x64-full.exe
             csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-x64-light.exe
+            csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-arm64-full.exe
+            csharp/RoomRelay-Setup-${{ needs.determine-release.outputs.version }}-win-arm64-light.exe
             csharp/SHA256SUMS.txt
           if-no-files-found: error
 
@@ -313,6 +338,7 @@ jobs:
             fi
             echo
             echo "## Assets"
+            echo "- \`win-x64\` artifacts target Intel/AMD 64-bit Windows; \`win-arm64\` artifacts target Windows on ARM (e.g., Snapdragon, Surface Pro X)."
             echo "- Full installer and ZIP include the app and bundled runtime dependencies."
             echo "- Light installer and ZIP require the Windows App Runtime to be installed separately."
           } > release-notes.md
