@@ -410,9 +410,6 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
   and SOAP 500 responses without spinning up real HTTP servers.
 
 ### Low priority
-- **Win2D `Microsoft.Graphics.Canvas.dll` AnyCPU vs x64 warning.**
-  Suppressed by `RuntimeIdentifier=win-x64`.
-
 - **Serilog log path discoverability.** The log lives at
   `%APPDATA%\RoomRelay\app{yyyymmdd}.log` but isn't shown in the
   UI; an "Open log" menu item would help debugging.

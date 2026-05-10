@@ -4,7 +4,7 @@
 
 #define MyAppName "RoomRelay"
 #ifndef MyAppVersion
-#define MyAppVersion "1.0.9"
+#define MyAppVersion "1.1.0"
 #endif
 #define MyAppPublisher "guicn555"
 #define MyAppURL "https://github.com/guicn555/RoomRelay"
@@ -16,6 +16,10 @@
 
 #ifndef ArtifactSuffix
 #define ArtifactSuffix "win-x64-full"
+#endif
+
+#ifndef TargetArch
+#define TargetArch "x64"
 #endif
 
 [Setup]
@@ -36,6 +40,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 MinVersion=10.0.19041
+ArchitecturesAllowed={#TargetArch}
+ArchitecturesInstallIn64BitMode={#TargetArch}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

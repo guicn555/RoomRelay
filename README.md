@@ -16,13 +16,18 @@ radio, and background audio where a small network buffer is acceptable.
 
 ## Download
 
-Download the latest release:
+Download the latest release from the [releases page](https://github.com/guicn555/RoomRelay/releases/latest):
 
-- [Windows installer](https://github.com/guicn555/RoomRelay/releases/latest)
-- [Portable/self-contained ZIP](https://github.com/guicn555/RoomRelay/releases/latest)
-- [Checksums](https://github.com/guicn555/RoomRelay/releases/latest)
+- **Windows x64** (Intel/AMD): installer (`RoomRelay-Setup-…-win-x64-full.exe`) or
+  portable ZIP (`RoomRelay-…-win-x64-full.zip`).
+- **Windows on ARM** (Snapdragon, Surface Pro X, etc.): installer
+  (`RoomRelay-Setup-…-win-arm64-full.exe`) or portable ZIP
+  (`RoomRelay-…-win-arm64-full.zip`).
+- A `-light` variant of each is also published; it omits the bundled Windows App
+  Runtime and requires the matching framework package to be installed separately.
+- `SHA256SUMS.txt` lists checksums for every artifact.
 
-The release build bundles the app and .NET runtime. It uses the installed
+The full release build bundles the app and .NET runtime. It uses the installed
 Windows App Runtime framework package on Windows.
 
 ## Why RoomRelay?
