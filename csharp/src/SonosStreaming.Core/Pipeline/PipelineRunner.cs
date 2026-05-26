@@ -278,7 +278,10 @@ public sealed class PipelineRunner : IDisposable
         try
         {
             var mix = CurrentMixFormat ?? throw new InvalidOperationException("Pipeline started without a capture format.");
-            _resampler = new Resampler(mix.SampleRate, mix.Channels);
+            if (mix.Channels > 2)
+                Log.Information("Capture is {Ch}-channel; will downmix to stereo before encode", mix.Channels);
+            ushort resamplerChannels = mix.Channels > 2 ? (ushort)2 : mix.Channels;
+            _resampler = new Resampler(mix.SampleRate, resamplerChannels);
             _encoder = Format switch
             {
                 StreamingFormat.Aac128 => new MfAacEncoder(128_000),
@@ -322,7 +325,8 @@ public sealed class PipelineRunner : IDisposable
                 UpdateClipping(samples);
                 _vuMeter.Process(samples, frame.Channels);
 
-                var i16Frame = _resampler.Process(frame);
+                var resamplerInput = frame.Channels > 2 ? PcmConvert.DownmixToStereo(frame) : frame;
+                var i16Frame = _resampler.Process(resamplerInput);
                 _encoder.Encode(i16Frame);
                 var chunk = _encoder.FlushChunk();
                 if (!chunk.IsEmpty)
