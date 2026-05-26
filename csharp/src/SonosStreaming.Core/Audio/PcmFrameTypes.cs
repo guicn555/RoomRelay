@@ -39,6 +39,51 @@ public sealed class PcmFrameI16
 
 public static class PcmConvert
 {
+    /// <summary>
+    /// Folds a multi-channel frame down to stereo. Returns the frame unchanged
+    /// if it is already stereo. Mono is duplicated to L+R. For N > 2 channels,
+    /// even-indexed channels fold to L and odd-indexed channels fold to R,
+    /// normalised so peak amplitude is preserved.
+    /// </summary>
+    public static PcmFrameF32 DownmixToStereo(PcmFrameF32 frame)
+    {
+        if (frame.Channels == 2) return frame;
+
+        int frameCount = frame.FrameCount;
+        int inCh = frame.Channels;
+        var output = new float[frameCount * 2];
+
+        if (inCh == 1)
+        {
+            for (int f = 0; f < frameCount; f++)
+            {
+                output[f * 2]     = frame.Samples[f];
+                output[f * 2 + 1] = frame.Samples[f];
+            }
+            return new PcmFrameF32(output, frame.SampleRate, 2);
+        }
+
+        // Even-indexed channels (FL, FC, BL, FLC, …) → L
+        // Odd-indexed channels  (FR, LFE, BR, FRC, …) → R
+        int evenCount = (inCh + 1) / 2;
+        int oddCount  = inCh / 2;
+        float scaleL  = 1f / evenCount;
+        float scaleR  = 1f / oddCount;
+        for (int f = 0; f < frameCount; f++)
+        {
+            float l = 0f, r = 0f;
+            int baseIdx = f * inCh;
+            for (int c = 0; c < inCh; c++)
+            {
+                if ((c & 1) == 0) l += frame.Samples[baseIdx + c];
+                else              r += frame.Samples[baseIdx + c];
+            }
+            output[f * 2]     = l * scaleL;
+            output[f * 2 + 1] = r * scaleR;
+        }
+        return new PcmFrameF32(output, frame.SampleRate, 2);
+    }
+
     public static void F32ToI16(ReadOnlySpan<float> input, List<short> output)
     {
         output.Clear();
