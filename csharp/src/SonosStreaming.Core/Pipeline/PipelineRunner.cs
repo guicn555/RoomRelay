@@ -38,6 +38,10 @@ public sealed class PipelineRunner : IDisposable
     private DateTime _lastFrameLog;
     private int _clippingHold;
 
+    // issue #23 diagnostic probe: raw (pre-DSP) capture peak over a window.
+    private readonly object _probePeakLock = new();
+    private float _probePeakWindow;
+
     public GainStage GainStage => _gainStage;
     public BalanceStage BalanceStage => _balanceStage;
     public VolumeStage VolumeStage => _volumeStage;
@@ -182,11 +186,17 @@ public sealed class PipelineRunner : IDisposable
 
         try
         {
+            // issue #23: instead of unconditionally muting the endpoint (which
+            // on some drivers also silences the WASAPI loopback tap, so Sonos
+            // gets silence), capture the original state and run an A/B/C probe
+            // that picks a strategy which silences the room without killing the
+            // loopback. See RunMuteProbeAsync.
             _muteGuard = new EndpointMuteGuard();
+            _ = Task.Run(() => RunMuteProbeAsync(_muteGuard, token), token);
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Could not mute default render endpoint");
+            Log.Warning(ex, "Could not start endpoint-mute/loopback probe");
         }
 
         try
@@ -313,6 +323,7 @@ public sealed class PipelineRunner : IDisposable
                     Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
 
                 var samples = frame.Samples.AsSpan();
+                NoteProbePeak(samples); // issue #23: raw capture peak, before any DSP/volume
                 _spectrumAnalyzer.Process(samples, frame.Channels);
                 _gainStage.Apply(samples, frame.Channels);
                 _balanceStage.Apply(samples, frame.Channels);
@@ -379,6 +390,108 @@ public sealed class PipelineRunner : IDisposable
             ? selection.ProcessSelection.Name
             : "Whole system";
         return $"RoomRelay - {source} to {device.FriendlyName}";
+    }
+
+    private void NoteProbePeak(ReadOnlySpan<float> samples)
+    {
+        float p = 0f;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float a = MathF.Abs(samples[i]);
+            if (a > p) p = a;
+        }
+        lock (_probePeakLock)
+        {
+            if (p > _probePeakWindow) _probePeakWindow = p;
+        }
+    }
+
+    private float TakeProbePeak()
+    {
+        lock (_probePeakLock)
+        {
+            var v = _probePeakWindow;
+            _probePeakWindow = 0f;
+            return v;
+        }
+    }
+
+    // issue #23 diagnostic: muting the default render endpoint silences the
+    // WASAPI loopback tap on some drivers, so Sonos receives silence. This
+    // probe streams for ~5s in each of three states while measuring the raw
+    // captured peak, logs the result, then settles on a strategy that silences
+    // the room without killing the loopback. The original mute/volume is
+    // restored when the guard is disposed on Stop.
+    private async Task RunMuteProbeAsync(EndpointMuteGuard guard, CancellationToken ct)
+    {
+        const float silenceThreshold = 1e-3f; // ~ -60 dBFS
+        try
+        {
+            Log.Information("issue#23 probe: starting endpoint-mute/loopback diagnostic " +
+                "(A=audible, B=mute, C=volume-0; ~5s each). Original endpoint mute={Mute}, volume={Vol:P0}.",
+                guard.PreviousMute, guard.PreviousVolume);
+
+            guard.ApplyAudible();
+            TakeProbePeak(); // reset window
+            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            float peakAudible = TakeProbePeak();
+
+            guard.ApplyMute();
+            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            float peakMuted = TakeProbePeak();
+
+            guard.ApplyVolumeZero();
+            await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+            float peakVolumeZero = TakeProbePeak();
+
+            bool audiblePlaying = peakAudible >= silenceThreshold;
+            bool muteKeepsLoopback = peakMuted >= silenceThreshold;
+            bool volumeZeroKeepsLoopback = peakVolumeZero >= silenceThreshold;
+
+            Log.Information("issue#23 probe RESULTS: peak(audible)={Audible:F4} peak(muted)={Muted:F4} " +
+                "peak(volume0)={Vol0:F4} (silence threshold {Thr:F4})",
+                peakAudible, peakMuted, peakVolumeZero, silenceThreshold);
+
+            if (!audiblePlaying)
+            {
+                Log.Warning("issue#23 probe INCONCLUSIVE: no audio was captured even with the endpoint audible. " +
+                    "Nothing was playing during the probe. Defaulting to MUTE; re-run with audio playing for a verdict.");
+                guard.ApplyMute();
+                return;
+            }
+
+            string chosen;
+            if (volumeZeroKeepsLoopback)
+            {
+                guard.ApplyVolumeZero();
+                chosen = "VOLUME=0 (room silenced, loopback preserved)";
+            }
+            else if (muteKeepsLoopback)
+            {
+                guard.ApplyMute();
+                chosen = "MUTE (room silenced, loopback preserved)";
+            }
+            else
+            {
+                guard.ApplyAudible();
+                chosen = "AUDIBLE (neither mute nor volume-0 preserves the loopback on this endpoint; " +
+                    "leaving it audible so Sonos still receives audio — the room will also hear the PC)";
+            }
+
+            Log.Information("issue#23 probe CONCLUSION: endpoint MUTE {MuteEffect} the loopback; " +
+                "VOLUME=0 {Vol0Effect} the loopback. Settling on {Chosen}.",
+                muteKeepsLoopback ? "PRESERVES" : "SILENCES",
+                volumeZeroKeepsLoopback ? "PRESERVES" : "SILENCES",
+                chosen);
+        }
+        catch (OperationCanceledException)
+        {
+            // Streaming stopped during the probe; guard restoration handles cleanup.
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "issue#23 probe failed");
+        }
     }
 
     private void UpdateClipping(ReadOnlySpan<float> samples)

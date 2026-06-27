@@ -7,10 +7,15 @@ using Windows.Win32.System.Com;
 
 namespace SonosStreaming.Core.Audio;
 
-// Mutes the default render endpoint on construction (so the room stays
-// quiet while Sonos plays the streamed audio — WASAPI loopback captures
-// post-mix but pre-mute, so the broadcast still carries real audio) and
-// restores the previous mute state when disposed.
+// Controls the default render endpoint's mute + master volume so the room can
+// be silenced while Sonos plays the streamed audio. Captures the original
+// mute/volume on construction (changing nothing) and restores them on dispose.
+//
+// NOTE (issue #23): this build does NOT silence on construction. Whether the
+// endpoint mute (or a zeroed master volume) sits before or after the WASAPI
+// loopback tap is driver-dependent, so PipelineRunner drives a short A/B/C
+// probe (audible -> mute -> volume-0) and picks whichever silences the room
+// without also silencing the loopback that feeds Sonos.
 public sealed unsafe class EndpointMuteGuard : IDisposable
 {
     private static readonly Guid CLSID_MMDeviceEnumerator = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
@@ -22,6 +27,7 @@ public sealed unsafe class EndpointMuteGuard : IDisposable
     private static extern int CoCreateInstance(in Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, in Guid riid, out IntPtr ppv);
 
     private readonly bool _previousMute;
+    private readonly float _previousVolume;
     private bool _restored;
 
     public EndpointMuteGuard()
@@ -32,11 +38,53 @@ public sealed unsafe class EndpointMuteGuard : IDisposable
             BOOL wasMuted;
             volume.GetMute(&wasMuted);
             _previousMute = wasMuted;
-            if (!_previousMute)
-            {
-                volume.SetMute(true, null);
-                Log.Information("Muted default render endpoint");
-            }
+
+            volume.GetMasterVolumeLevelScalar(out float level);
+            _previousVolume = level;
+        }
+        finally { Marshal.ReleaseComObject(volume); }
+    }
+
+    public bool PreviousMute => _previousMute;
+    public float PreviousVolume => _previousVolume;
+
+    // Probe phase A: leave the endpoint audible at its original level.
+    public void ApplyAudible()
+    {
+        if (_restored) return;
+        var volume = GetDefaultRenderEndpointVolume();
+        try
+        {
+            volume.SetMute(false, null);
+            volume.SetMasterVolumeLevelScalar(_previousVolume, null);
+            Log.Information("Probe: endpoint left audible (volume {Vol:P0})", _previousVolume);
+        }
+        finally { Marshal.ReleaseComObject(volume); }
+    }
+
+    // Probe phase B / strategy: mute the endpoint (current shipping behavior).
+    public void ApplyMute()
+    {
+        if (_restored) return;
+        var volume = GetDefaultRenderEndpointVolume();
+        try
+        {
+            volume.SetMute(true, null);
+            Log.Information("Probe: applied endpoint MUTE");
+        }
+        finally { Marshal.ReleaseComObject(volume); }
+    }
+
+    // Probe phase C / strategy: unmute and drop master volume to zero.
+    public void ApplyVolumeZero()
+    {
+        if (_restored) return;
+        var volume = GetDefaultRenderEndpointVolume();
+        try
+        {
+            volume.SetMute(false, null);
+            volume.SetMasterVolumeLevelScalar(0f, null);
+            Log.Information("Probe: applied endpoint VOLUME=0 (unmuted)");
         }
         finally { Marshal.ReleaseComObject(volume); }
     }
@@ -50,14 +98,15 @@ public sealed unsafe class EndpointMuteGuard : IDisposable
             var volume = GetDefaultRenderEndpointVolume();
             try
             {
+                volume.SetMasterVolumeLevelScalar(_previousVolume, null);
                 volume.SetMute(_previousMute, null);
-                Log.Information("Restored default render endpoint mute state to {Muted}", _previousMute);
+                Log.Information("Restored default render endpoint to mute={Muted}, volume={Vol:P0}", _previousMute, _previousVolume);
             }
             finally { Marshal.ReleaseComObject(volume); }
         }
         catch (Exception ex)
         {
-            Log.Warning(ex, "Failed to restore endpoint mute state");
+            Log.Warning(ex, "Failed to restore endpoint mute/volume state");
         }
     }
 
