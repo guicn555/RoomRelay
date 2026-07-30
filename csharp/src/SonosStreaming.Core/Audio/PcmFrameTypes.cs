@@ -63,23 +63,38 @@ public static class PcmConvert
             return new PcmFrameF32(output, frame.SampleRate, 2);
         }
 
-        // Even-indexed channels (FL, FC, BL, FLC, …) → L
-        // Odd-indexed channels  (FR, LFE, BR, FRC, …) → R
-        int evenCount = (inCh + 1) / 2;
-        int oddCount  = inCh / 2;
-        float scaleL  = 1f / evenCount;
-        float scaleR  = 1f / oddCount;
+        // WAVEFORMATEXTENSIBLE standard layouts (KSAUDIO_SPEAKER_5POINT1 / 7POINT1):
+        //   5.1: FL FR FC LFE BL BR
+        //   7.1: FL FR FC LFE BL BR SL SR
+        // ITU-R BS.775 style: FC and LFE split equally to L+R, surrounds at -3 dB.
+        const float c3dB = 0.7071f;
         for (int f = 0; f < frameCount; f++)
         {
-            float l = 0f, r = 0f;
-            int baseIdx = f * inCh;
-            for (int c = 0; c < inCh; c++)
+            int b = f * inCh;
+            float l, r;
+            switch (inCh)
             {
-                if ((c & 1) == 0) l += frame.Samples[baseIdx + c];
-                else              r += frame.Samples[baseIdx + c];
+                case 6: // 5.1
+                    l = frame.Samples[b]   + c3dB * frame.Samples[b+2] + c3dB * frame.Samples[b+4] + frame.Samples[b+3];
+                    r = frame.Samples[b+1] + c3dB * frame.Samples[b+2] + c3dB * frame.Samples[b+5] + frame.Samples[b+3];
+                    break;
+                case 8: // 7.1
+                    l = frame.Samples[b]   + c3dB * frame.Samples[b+2] + c3dB * frame.Samples[b+4] + c3dB * frame.Samples[b+6] + frame.Samples[b+3];
+                    r = frame.Samples[b+1] + c3dB * frame.Samples[b+2] + c3dB * frame.Samples[b+5] + c3dB * frame.Samples[b+7] + frame.Samples[b+3];
+                    break;
+                default: // generic even/odd fallback for unusual layouts
+                    l = 0f; r = 0f;
+                    for (int ch = 0; ch < inCh; ch++)
+                    {
+                        if ((ch & 1) == 0) l += frame.Samples[b + ch];
+                        else               r += frame.Samples[b + ch];
+                    }
+                    l /= (inCh + 1) / 2;
+                    r /= inCh / 2;
+                    break;
             }
-            output[f * 2]     = l * scaleL;
-            output[f * 2 + 1] = r * scaleR;
+            output[f * 2]     = l;
+            output[f * 2 + 1] = r;
         }
         return new PcmFrameF32(output, frame.SampleRate, 2);
     }
