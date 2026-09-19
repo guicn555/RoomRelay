@@ -150,6 +150,11 @@ public sealed class DiagnosticsPackageService
         sb.AppendLine($"Stream URL: {pipeline.CurrentStreamUrl ?? "n/a"}");
         sb.AppendLine($"Frames emitted: {pipeline.FramesEmitted}");
         sb.AppendLine($"Slow stream writes: {pipeline.SlowWriteCount}");
+        sb.AppendLine($"Dropped stream subscribers: {pipeline.Broadcast.DroppedSubscribers}");
+        sb.AppendLine($"Capture buffers dropped: {pipeline.CaptureDroppedBuffers} ({pipeline.CaptureDroppedMs:F0} ms)");
+        sb.AppendLine($"Governor padded silence: {pipeline.PaddedSilenceMs:F0} ms");
+        sb.AppendLine($"Governor trimmed audio: {pipeline.TrimmedMs:F0} ms");
+        sb.AppendLine($"Output clock skew: {pipeline.CurrentClockSkewMs:F0} ms");
         sb.AppendLine($"Started UTC: {pipeline.StartedAtUtc?.ToString("O") ?? "n/a"}");
         sb.AppendLine($"First chunk UTC: {pipeline.FirstChunkAtUtc?.ToString("O") ?? "n/a"}");
         sb.AppendLine($"First client UTC: {pipeline.FirstClientAtUtc?.ToString("O") ?? "n/a"}");

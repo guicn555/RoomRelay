@@ -989,7 +989,12 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             var versionAtRefreshStart = Interlocked.Read(ref _sonosVolumeUserVersion);
-            var volume = await new SonosController().GetVolumeAsync(speaker);
+            var controller = new SonosController();
+            // Capture each group member's current level first, so later
+            // SetGroupVolume calls scale the whole group and keep the rooms'
+            // relative levels intact (issue #30).
+            await controller.SnapshotGroupVolumeAsync(speaker);
+            var volume = await controller.GetVolumeAsync(speaker);
             if (versionAtRefreshStart != Interlocked.Read(ref _sonosVolumeUserVersion))
                 return;
 
