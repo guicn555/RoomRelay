@@ -54,6 +54,18 @@ public sealed class AppSettings : IDisposable
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOpts) ?? new AppSettings();
             settings.ManualSpeakerEndpoints ??= [];
             settings.ProcessPreferences ??= [];
+
+            // Retire L16 PCM (issue #32). Sonos never supported audio/L16, so a
+            // settings file carrying it would otherwise leave the user on a
+            // format that plays nothing, with no indication why.
+            if (settings.StreamingFormat == StreamingFormat.L16Pcm)
+            {
+                Log.Information("Migrating retired L16 PCM format to WAV PCM; Sonos does not support audio/L16 (issue #32)");
+                settings.StreamingFormat = StreamingFormat.WavPcm;
+            }
+            foreach (var pref in settings.ProcessPreferences)
+                pref.StreamingFormat = pref.StreamingFormat.Normalize();
+
             return settings;
         }
         catch (Exception ex)

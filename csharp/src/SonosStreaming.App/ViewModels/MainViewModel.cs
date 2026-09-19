@@ -176,16 +176,24 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     public partial string PlaybackTargetLabel { get; set; }
 
-    private static readonly StreamingFormat[] _visibleFormats = Enum.GetValues<StreamingFormat>();
+    // Not Enum.GetValues: retired formats stay in the enum so old settings
+    // deserialize, but must not be offered (issue #32).
+    private static readonly StreamingFormat[] _visibleFormats = StreamingFormatExtensions.Selectable.ToArray();
     public StreamingFormat[] AvailableFormats { get; } = _visibleFormats;
     public string[] AvailableFormatNames { get; } = _visibleFormats.Select(f => f.DisplayName()).ToArray();
     private static readonly StreamingLatencyMode[] _visibleLatencyModes = Enum.GetValues<StreamingLatencyMode>();
     public string[] AvailableLatencyModeNames { get; } = _visibleLatencyModes.Select(m => m.DisplayName()).ToArray();
 
+    // Index into AvailableFormats rather than casting the enum, so the picker
+    // stays correct as values are retired from the list.
     public int SelectedFormatIndex
     {
-        get => (int)SelectedFormat;
-        set { if (value >= 0) SelectedFormat = (StreamingFormat)value; }
+        get
+        {
+            var idx = Array.IndexOf(_visibleFormats, SelectedFormat.Normalize());
+            return idx >= 0 ? idx : Array.IndexOf(_visibleFormats, StreamingFormat.Aac256);
+        }
+        set { if (value >= 0 && value < _visibleFormats.Length) SelectedFormat = _visibleFormats[value]; }
     }
 
     public int SelectedLatencyModeIndex
@@ -198,7 +206,7 @@ public sealed partial class MainViewModel : ObservableObject
         ? "Low latency uses smaller buffers for PCM/WAV and may be more sensitive to Wi-Fi or older Sonos hardware."
         : SelectedFormat.IsPcm()
             ? "Stable keeps larger buffers and is recommended for music, podcasts, radio, and unreliable Wi-Fi."
-            : "AAC always uses Stable mode because Sonos and AAC buffering dominate latency. Use WAV/L16 PCM for low-latency mode.";
+            : "AAC always uses Stable mode because Sonos and AAC buffering dominate latency. Use WAV PCM for low-latency mode.";
     public string LatencyModeLabel => SelectedLatencyMode.DisplayName();
     public bool CanSelectLatencyMode => SelectedFormat.IsPcm() && IsNotStreaming;
 

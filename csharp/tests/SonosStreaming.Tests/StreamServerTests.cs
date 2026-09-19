@@ -81,15 +81,18 @@ public class StreamServerTests
     }
 
     [Fact]
-    public void StreamUrl_L16PcmFormat_UsesL16Extension()
+    public void StreamUrl_RetiredL16PcmFormat_FallsBackToWavExtension()
     {
+        // L16Pcm is retired (issue #32) but survives in the enum so old
+        // settings deserialize. A stale value must serve WAV, which Sonos
+        // supports, rather than audio/L16, which it does not.
         var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
         var server = new StreamServer(broadcast, 0, StreamingFormat.L16Pcm);
         server.Start();
         try
         {
             var url = server.StreamUrl("192.168.1.10:8000");
-            url.Should().MatchRegex(@"^http://192\.168\.1\.10:8000/stream/[0-9a-f]{16}\.l16$");
+            url.Should().MatchRegex(@"^http://192\.168\.1\.10:8000/stream/[0-9a-f]{16}\.wav$");
         }
         finally
         {
