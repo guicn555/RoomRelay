@@ -335,8 +335,10 @@ public sealed class PipelineRunner : IDisposable
                 StreamingFormat.Aac192 => new MfAacEncoder(192_000),
                 StreamingFormat.Aac256 => new MfAacEncoder(256_000),
                 StreamingFormat.Aac320 => new MfAacEncoder(320_000),
-                StreamingFormat.WavPcm => (IAudioEncoder)new LpcmEncoder(LatencyMode.PcmFlushBytes()),
-                StreamingFormat.L16Pcm => new L16PcmEncoder(LatencyMode.PcmFlushBytes()),
+                // L16Pcm is retired (issue #32) and normalized to WavPcm on
+                // load, but map it here too so a stale value can never reach
+                // the encoder switch and fall through to AAC.
+                StreamingFormat.WavPcm or StreamingFormat.L16Pcm => (IAudioEncoder)new LpcmEncoder(LatencyMode.PcmFlushBytes()),
                 _                      => new MfAacEncoder(256_000),
             };
 

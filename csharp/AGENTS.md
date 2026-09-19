@@ -428,6 +428,27 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     hiccup lose audio. The counters surface in the log line and the
     diagnostics bundle.
 
+42. **Sonos does not support `audio/L16`.** `StreamingFormat.L16Pcm` is
+    retired (issue #32). `ConnectionManager` `GetProtocolInfo` returns
+    the sink formats a player can decode, and on a One SL, a Beam and an
+    Arc that list has 65 entries with no `audio/L16`; the only PCM ones
+    are `audio/wav` and `audio/x-wav`. The failure was silent because
+    `SetAVTransportURI` and `Play` both succeed and Sonos only rejects
+    the stream when it opens it, reads one chunk, and finds no decoder.
+    The enum member stays so an existing `settings.json` deserializes:
+    `AppSettings.Load` migrates it to `WavPcm`, `Selectable` omits it
+    from the picker, and the extension methods map it to the WAV
+    behaviour so a stale value degrades to a format that works. When
+    adding a format, check `GetProtocolInfo` on a real speaker first
+    rather than trusting that a standard type is supported.
+
+43. **The format picker indexes `Selectable`, not the enum.**
+    `MainViewModel.SelectedFormatIndex` used to cast the index straight
+    to `StreamingFormat`, which only worked while the values were
+    contiguous and every one was offered. It now looks the value up in
+    `_visibleFormats`, so retiring a format cannot silently shift what
+    the other entries select.
+
 ## Testing pattern
 
 I/O boundaries are behind interfaces:

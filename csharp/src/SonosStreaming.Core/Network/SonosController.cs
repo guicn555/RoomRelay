@@ -31,7 +31,7 @@ public sealed class SonosController : ISonosController
     {
         var escaped = XmlEscape(streamUrl);
         // x-rincon-mp3radio:// forces Sonos into its MPEG radio decoder.
-        // For LPCM (audio/L16) we send the plain http:// URI so Sonos
+        // For WAV PCM (audio/wav) we send the plain http:// URI so Sonos
         // respects the Content-Type header and picks the PCM decoder.
         var currentUri = useRadioScheme ? $"x-rincon-mp3radio://{escaped}" : escaped;
 

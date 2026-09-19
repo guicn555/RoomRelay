@@ -107,18 +107,18 @@ public class MockSonosE2E : IDisposable
     }
 
     [Fact]
-    public void BuildSetUriEnvelope_L16Metadata_UsesL16ProtocolInfo()
+    public void BuildSetUriEnvelope_WavMetadata_UsesWavProtocolInfo()
     {
         var env = SonosController.BuildSetUriEnvelope(
-            "http://192.168.1.10:8000/stream/test.l16",
+            "http://192.168.1.10:8000/stream/test.wav",
             useRadioScheme: false,
-            metadataTitle: "RoomRelay — Living Room",
-            metadataResourceUrl: "http://192.168.1.10:8000/stream/test.l16",
-            contentType: "audio/L16");
+            metadataTitle: "RoomRelay - Living Room",
+            metadataResourceUrl: "http://192.168.1.10:8000/stream/test.wav",
+            contentType: "audio/wav");
 
-        env.Should().Contain("RoomRelay — Living Room");
-        env.Should().Contain("http-get:*:audio/L16:*");
-        env.Should().Contain("http://192.168.1.10:8000/stream/test.l16");
+        env.Should().Contain("RoomRelay - Living Room");
+        env.Should().Contain("http-get:*:audio/wav:*");
+        env.Should().Contain("http://192.168.1.10:8000/stream/test.wav");
     }
 
     [Fact]

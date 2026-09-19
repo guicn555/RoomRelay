@@ -2,7 +2,8 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/guicn555/RoomRelay)](https://github.com/guicn555/RoomRelay/releases)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE)
-[![.NET](https://img.shields.io/badge/.NET-9.0-512BD4)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)](https://dotnet.microsoft.com/)
+[![Windows App SDK](https://img.shields.io/badge/Windows%20App%20SDK-2.0-0078D4)](https://learn.microsoft.com/windows/apps/windows-app-sdk/)
 
 RoomRelay is an open-source Windows app for streaming system audio or a
 single application's audio to Sonos speakers on your local network.
@@ -52,8 +53,12 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
 - Discover Sonos speakers on the local network.
 - Collapse stereo pairs into one selectable room.
 - Built-in volume, per-channel gain, EQ, delay, VU, and spectrum tools.
-- Stable and low-latency streaming modes, with WAV/L16 PCM options for users
-  willing to trade bandwidth and compatibility for lower buffering.
+- Sonos volume control that moves the whole zone group, keeping each room's
+  relative level.
+- Stable and low-latency streaming modes, with a lossless WAV PCM option for
+  users willing to trade bandwidth for lower buffering.
+- The encoded stream is paced against a wall clock, so a capture hiccup or an
+  idle PC cannot slowly starve the speaker's buffer.
 - Per-application format and latency preferences are remembered when the app
   session appears again.
 - Tray icon with show/quit actions and close-to-tray behavior.
@@ -69,8 +74,9 @@ awkward. RoomRelay gives that use case a native, open-source Windows app.
 - Like most network Sonos streaming approaches, it is not intended for
   low-latency gaming or video sync.
 - AAC is the recommended default and may have several seconds of Sonos buffering
-  latency. WAV/L16 PCM is lower latency but experimental, high-bandwidth, and
-  more sensitive to Wi-Fi or older Sonos hardware.
+  latency, because Sonos pre-buffers the stream as internet radio. WAV PCM is
+  noticeably lower latency but uses about 1.5 Mbps and is more sensitive to
+  Wi-Fi or older Sonos hardware.
 - Per-application capture depends on Windows process-loopback support and is
   best on current Windows 11 builds.
 - The first run may require allowing the Windows Defender Firewall prompt on
@@ -105,10 +111,17 @@ folder** for manual access.
 | | Minimum | Recommended |
 |---|---|---|
 | **OS** | Windows 10 22H2 | Windows 11 23H2 or later |
+| **Architecture** | x64 or ARM64 | x64 or ARM64 |
+| **Runtime** | Bundled in the `-full` artifacts | Bundled in the `-full` artifacts |
 
-> **Minimal dependencies.** Release artifacts include the .NET runtime and app
-> libraries. Windows 11 normally already includes the Windows App Runtime
-> framework package used by RoomRelay.
+RoomRelay targets **.NET 10** and **WinUI 3** via the **Windows App SDK 2.0**.
+The `-full` release artifacts carry the .NET runtime, so only the Windows App
+Runtime framework package is resolved from the system, and Windows 11 normally
+already has it. The `-light` artifacts omit the bundled runtime.
+
+> **Minimal dependencies.** There is no FFmpeg, no NAudio, and no third-party
+> audio runtime. Capture, resampling, and AAC encoding all go through Windows
+> APIs (WASAPI and Media Foundation) via CsWin32-generated bindings.
 
 ### Why Windows 11 is recommended
 
@@ -133,7 +146,7 @@ Install RoomRelay from the installer, or extract the ZIP and run
 | Use case | Format | Latency mode | Notes |
 |---|---|---|---|
 | Music, podcasts, radio | AAC 256 kbps | Stable | Recommended default; most tolerant of Wi-Fi and older speakers. |
-| Casual video | WAV PCM or L16 PCM | Low latency | Lower buffering, but high bandwidth and model/network dependent. |
+| Casual video | WAV PCM | Low latency | Lower buffering, but high bandwidth and model/network dependent. |
 | Unstable Wi-Fi | AAC 128/192/256 kbps | Stable | Prefer AAC and avoid PCM until the network is reliable. |
 | Older Sonos hardware | AAC 256 kbps | Stable | PCM may fail, stutter, or buffer for a long time. |
 | Per-application capture | Start with AAC 256 kbps | Stable | Switch to Whole system if the app is protected, elevated, browser-isolated, or silent. |
@@ -143,18 +156,44 @@ Install RoomRelay from the installer, or extract the ZIP and run
 - **Stable** keeps larger capture and PCM batching buffers. Use it when audio
   quality and reliability matter more than delay.
 - **Low latency** uses smaller WASAPI and PCM buffers. It can reduce delay for
-  WAV/L16 streams, but it is more sensitive to packet loss, slow writes, and
+  WAV streams, but it is more sensitive to packet loss, slow writes, and
   Sonos model behavior.
 - RoomRelay still cannot bypass Sonos' own network buffering. It is not a
   replacement for HDMI, analog speakers, or gaming/headset audio.
 
 ### Format compatibility
 
-- **AAC** is the safest Sonos path and remains the default.
-- **WAV PCM** is lossless 48 kHz stereo in a streaming WAV container. It uses
-  about 1.5 Mbps and may require more Sonos buffering before playback starts.
-- **L16 PCM** is raw network-order PCM advertised as `audio/L16`. It has less
-  container overhead, but compatibility may vary by Sonos model and firmware.
+- **AAC** is the safest Sonos path and remains the default. Sonos treats it as
+  an internet radio stream, which is reliable but adds around a second of
+  pre-buffering.
+- **WAV PCM** is lossless 48 kHz stereo in a streaming WAV container, served as
+  `audio/wav`. It uses about 1.5 Mbps and gives noticeably lower latency than
+  AAC, because Sonos does not apply radio-style pre-buffering to it.
+
+#### Why there is no L16 PCM option
+
+Earlier versions offered an **L16 PCM** mode: the same 16-bit samples in
+network byte order with no container, served as `audio/L16`. It never worked,
+and it was removed rather than fixed.
+
+`audio/L16` is a standard type (RFC 2586) and is common in UPnP and DLNA
+renderers, but Sonos does not implement it. Asking a speaker directly settles
+it: `ConnectionManager` `GetProtocolInfo` returns the list of formats a player
+can decode, and on a Sonos One SL, a Beam, and an Arc that list has 65 entries
+with no `audio/L16` among them. The only PCM entries are `audio/wav` and
+`audio/x-wav`.
+
+The failure was quiet and easy to misread. `SetAVTransportURI` and `Play` both
+succeed, because Sonos does not check the content type until it opens the
+stream. It then reads a single chunk, fails to find a decoder, and closes the
+connection, so the app looked like it was streaming while the room stayed
+silent.
+
+Nothing is lost by removing it. WAV PCM carries identical audio, differing only
+by a 44-byte header per connection and byte order, and it is the format Sonos
+actually supports. If an older `settings.json` still selects L16 PCM, RoomRelay
+migrates it to WAV PCM on startup. See
+[issue #32](https://github.com/guicn555/RoomRelay/issues/32).
 
 ### Troubleshooting discovery
 
@@ -210,9 +249,10 @@ Install RoomRelay from the installer, or extract the ZIP and run
 - **Encodes** to AAC-LC @ 256 kbps using the Windows Media Foundation
   AAC encoder MFT (`CLSID_CMSAACEncMFT`) configured with
   `MF_MT_AAC_PAYLOAD_TYPE = 1` so the output is already ADTS-framed.
-- **Serves** the ADTS stream on `http://<host>:8000/stream.aac` from a
-  raw `TcpListener` HTTP/1.0 server (no chunked encoding — Sonos
-  rejects it).
+- **Serves** the ADTS stream on `http://<host>:8000/stream/<token>.aac` from a
+  raw `TcpListener` HTTP/1.0 server (no chunked encoding, which Sonos rejects).
+  The token is random per run, and the server binds to the interface that
+  routes to the chosen speaker rather than to all interfaces.
 - **Discovers** Sonos speakers via SSDP M-SEARCH on every usable network
   interface — IPv4 (`239.255.255.250`) and IPv6 (`ff02::c`) — with
   concurrent per-socket receive loops. Resolves user-set zone names from
@@ -225,7 +265,14 @@ Install RoomRelay from the installer, or extract the ZIP and run
 - **Mutes** the default render endpoint while streaming so the room
   doesn't hear PC audio twice (loopback captures pre-mute, so Sonos
   still gets data).
-- **Injects silence** when loopback is idle so Sonos doesn't disconnect.
+- **Paces the output against a wall clock.** WASAPI loopback delivers nothing
+  at all while the PC is silent, and a busy machine can drop capture buffers,
+  so the stream would otherwise run slowly short of real time until the
+  speaker's buffer drained. A rate governor compares what has been produced
+  against what the clock says should exist, fills any shortfall with silence,
+  and skips a buffer if output ever runs ahead. AAC hides small shortfalls
+  because Sonos resyncs on ADTS frames; raw PCM has no framing and simply
+  stalls, which is why this matters most for WAV.
 
 ## UI
 
@@ -243,6 +290,9 @@ WinUI 3 window with Mica backdrop and declarative XAML UI:
   sections. These are RoomRelay DSP controls; they do not change Sonos device
   volume or tone.
 - Sonos device volume can be refreshed and applied separately through Sonos
+  `GroupRenderingControl`, so changing it moves every room in the group while
+  preserving their relative levels. Players that do not expose the group
+  service, such as bonded satellites, fall back to per-player
   `RenderingControl`.
 - Live VU meter and spectrum analyzer (Win2D, 30 fps).
 - `InfoBar` error notification when the pipeline crashes or the audio
@@ -316,9 +366,9 @@ WASAPI / process-loopback capture → PcmFrameF32
                                         ↓
                             Resampler (f32 → i16 @ 48 kHz)
                                         ↓
-                           MfAacEncoder (Media Foundation MFT)
-                                         ↓
-                           ADTS-framed AAC accumulated in 16 KB batches
+              OutputRateGovernor (pads or trims against the wall clock)
+                                        ↓
+           MfAacEncoder (Media Foundation MFT)  |  LpcmEncoder (WAV)
                                          ↓
                         BroadcastChannel<ReadOnlyMemory<byte>>
                                         ↓
@@ -341,13 +391,23 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
 ## Status
 
 End-to-end working: whole-system capture, per-application capture,
-real-time DSP, AAC streaming to a Sonos speaker or stereo pair,
-endpoint-mute-while-streaming, settings persistence with debounced
-saves, tray icon, native context menu, clean shutdown, pipeline crash
-recovery with user-visible errors, audio endpoint format-change
-detection, and dual-stack IPv4/IPv6 SSDP discovery. Audio backend is
-FFmpeg-free and NAudio-free — only Windows-native APIs. Builds with
-**zero warnings**.
+real-time DSP, AAC and lossless WAV PCM streaming to a Sonos speaker,
+stereo pair, or zone group, group-wide volume control,
+endpoint-mute-while-streaming, wall-clock output pacing, settings
+persistence with debounced saves, tray icon, native context menu, clean
+shutdown, pipeline crash recovery with user-visible errors, audio endpoint
+format-change detection, and dual-stack IPv4/IPv6 SSDP discovery. Audio
+backend is FFmpeg-free and NAudio-free, using only Windows-native APIs.
+Builds with **zero warnings**.
+
+Stream rate measured against real hardware, where nominal is the exact byte
+rate the declared format implies:
+
+| format | duration | delivered | vs nominal |
+|---|---|---|---|
+| AAC 256 | 621.8 s | 31,998 B/s | 99.995% |
+| AAC 320 | 539.5 s | 39,995 B/s | 99.99% |
+| WAV PCM | 301.2 s | 192,015 B/s | +0.008% |
 
 ## License
 
