@@ -16,8 +16,6 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
     [DllImport("Ole32.dll", ExactSpelling = true)]
     private static extern int CoCreateInstance(in Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, in Guid riid, out IntPtr ppv);
 
-    private Thread? _silenceThread;
-    private long _lastDataTicks;
     private readonly int _captureBufferMs;
 
     public WasapiLoopbackSource(int captureBufferMs = 200)
@@ -56,7 +54,6 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
                 pwfx,
                 null);
 
-            _lastDataTicks = DateTime.UtcNow.Ticks;
             BeginCapture(client, pwfx, "WasapiLoopback");
 
             Log.Information("WASAPI loopback capture started: {Rate} Hz, {Ch} ch, {Bits}-bit, float={IsFloat}, buffer={BufferMs} ms",
@@ -68,31 +65,15 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
         }
     }
 
-    protected override void OnBeforeCaptureStart()
-    {
-        _silenceThread = new Thread(SilenceLoop) { IsBackground = true, Name = "WasapiSilence" };
-        _silenceThread.Start();
-    }
-
-    private void SilenceLoop()
-    {
-        while (!_stopped)
-        {
-            Thread.Sleep(100);
-            if (_stopped || _mixFormat == null) continue;
-            var elapsed = TimeSpan.FromTicks(DateTime.UtcNow.Ticks - Volatile.Read(ref _lastDataTicks));
-            if (elapsed < TimeSpan.FromMilliseconds(100)) continue;
-
-            int silenceFrames = (int)(_mixFormat!.SampleRate / 10);
-            var frame = PcmFrameF32.Silent(silenceFrames, _mixFormat!.SampleRate, _mixFormat!.Channels);
-            _channel.Writer.TryWrite(frame);
-            Volatile.Write(ref _lastDataTicks, DateTime.UtcNow.Ticks);
-        }
-    }
+    // Idle gaps used to be filled by a dedicated silence thread here, which ran
+    // on a Thread.Sleep(100) cadence but emitted exactly 100 ms of audio per
+    // wake-up, so every idle stretch under-delivered by the sleep overshoot
+    // (issue #26). It also raced the pump's own silence injection, producing
+    // double silence when both fired. PipelineRunner's rate governor is now the
+    // single source of padding, driven off a wall clock.
 
     protected override unsafe void ConvertToFloat(byte* src, float[] dst, uint frames)
     {
-        _lastDataTicks = DateTime.UtcNow.Ticks;
         int totalSamples = (int)frames * _channelCount;
         if (_inputIsFloat && _bytesPerSample == 4)
         {
@@ -118,7 +99,6 @@ public sealed unsafe class WasapiLoopbackSource : WasapiCaptureBase
 
     protected override void OnDispose()
     {
-        try { _silenceThread?.Join(200); } catch { }
         Log.Information("WASAPI loopback capture stopped");
     }
 

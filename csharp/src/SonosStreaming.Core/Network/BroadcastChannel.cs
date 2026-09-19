@@ -42,29 +42,42 @@ public sealed class BroadcastChannel<T>
         return ch;
     }
 
+    /// <summary>
+    /// Detaches a subscription. Callers must do this when their client goes
+    /// away: an abandoned subscription keeps receiving chunks until its buffer
+    /// fills, which inflates <see cref="SubscriberCount"/>, pins up to
+    /// <c>capacity</c> chunks of audio per dead client, and eventually logs a
+    /// misleading "slow subscriber" warning (issue #26).
+    /// </summary>
+    public void Unsubscribe(Channel<T> subscription)
+    {
+        bool removed;
+        lock (_lock) { removed = _subscribers.Remove(subscription); }
+        if (removed) subscription.Writer.TryComplete();
+    }
+
     public void Write(T item)
     {
-        List<Channel<T>> snapshot;
-        lock (_lock) { snapshot = new List<Channel<T>>(_subscribers); }
-
-        var toRemove = new List<Channel<T>>();
-        foreach (var sub in snapshot)
+        List<Channel<T>>? toRemove = null;
+        lock (_lock)
         {
-            if (!sub.Writer.TryWrite(item))
+            foreach (var sub in _subscribers)
             {
+                if (sub.Writer.TryWrite(item)) continue;
                 sub.Writer.TryComplete();
-                toRemove.Add(sub);
+                (toRemove ??= new List<Channel<T>>()).Add(sub);
                 Interlocked.Increment(ref _droppedSubscribers);
             }
-        }
 
-        if (toRemove.Count > 0)
-        {
-            lock (_lock)
+            if (toRemove != null)
             {
                 foreach (var sub in toRemove)
                     _subscribers.Remove(sub);
             }
+        }
+
+        if (toRemove != null)
+        {
             Log.Warning("Dropped {Count} slow stream subscriber(s); total dropped={Total}",
                 toRemove.Count, DroppedSubscribers);
         }

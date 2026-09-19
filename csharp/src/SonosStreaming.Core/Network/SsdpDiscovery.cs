@@ -281,4 +281,5 @@ public sealed record SonosDevice(string FriendlyName, IPAddress Ip, ushort Port,
 {
     public string AvTransportControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/AVTransport/Control";
     public string RenderingControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/RenderingControl/Control";
+    public string GroupRenderingControlUrl => $"http://{SsdpDiscovery.FormatHost(Ip)}:{Port}/MediaRenderer/GroupRenderingControl/Control";
 }

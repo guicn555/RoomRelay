@@ -388,6 +388,46 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     replaced by a subtle overflow button with a `MenuFlyout`,
     matching the card-based UI. Commands bind directly to VM commands.
 
+38. **The output stream must be paced against a wall clock.** Nothing
+    downstream of capture paces the stream, so anything that loses
+    capture buffers permanently shortens it. AAC tolerates a shortfall
+    (ADTS frames are self-describing and Sonos resyncs); raw PCM does
+    not, so the speaker's jitter buffer drains and playback stalls
+    after a minute or so. `OutputRateGovernor` compares sample frames
+    produced against what the clock says should exist, pads the
+    shortfall with silence, and skips a buffer when output runs more
+    than 250 ms ahead. `PipelineRunner` anchors it with `Start()` at
+    the top of the pump, **not** on the first captured frame: WASAPI
+    loopback delivers nothing at all while the endpoint has no active
+    stream, so waiting for real audio would send a silent PC's Sonos
+    an empty response body.
+
+39. **Stream subscribers must be unsubscribed.** `BroadcastChannel`
+    hands out a `Channel<T>` per HTTP connection; `StreamServer`
+    releases it in a `finally`. An abandoned subscription keeps
+    receiving chunks until its buffer fills, which inflates the client
+    count shown in the UI and diagnostics, pins up to `capacity` chunks
+    of audio per dead client (about 3 MB for PCM), and then logs a
+    "slow subscriber" warning that reads like a network fault in bug
+    reports.
+
+40. **Group volume needs `GroupRenderingControl`.** `RenderingControl`
+    `SetVolume` is per-player by definition, so on a zone group it only
+    moves the coordinator. `GroupRenderingControl:1` at
+    `/MediaRenderer/GroupRenderingControl/Control` scales every member
+    and keeps their relative levels. It is **not** advertised in
+    `device_description.xml` and bonded satellites reject it (a Sub
+    answers HTTP 500), so `SonosController` falls back to
+    `RenderingControl` and remembers which UDNs rejected it.
+
+41. **Capture drops are counted, not silent.** The capture channel is
+    `DropOldest`, which is right for live audio but used to discard
+    buffers invisibly. `WasapiCaptureBase.WriteFrame` checks the queue
+    depth first and counts drops, and the queue holds ~1 s
+    (`DefaultCapacity`) rather than the 8 buffers (~80 ms) that made a
+    hiccup lose audio. The counters surface in the log line and the
+    diagnostics bundle.
+
 ## Testing pattern
 
 I/O boundaries are behind interfaces:

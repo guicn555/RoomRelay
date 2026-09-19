@@ -8,7 +8,15 @@ public sealed class SonosController : ISonosController
 {
     private const string SoapNsAvTransport = "urn:schemas-upnp-org:service:AVTransport:1";
     private const string SoapNsRenderingControl = "urn:schemas-upnp-org:service:RenderingControl:1";
+    private const string SoapNsGroupRenderingControl = "urn:schemas-upnp-org:service:GroupRenderingControl:1";
     private readonly HttpClient _http;
+
+    // GroupRenderingControl is only useful on a zone-group coordinator, and it
+    // is not advertised in device_description.xml, so failures are expected on
+    // bonded satellites (a Sub answers HTTP 500). Remember which endpoints
+    // rejected it so every slider move doesn't pay for a failing round trip.
+    private static readonly HashSet<string> NoGroupRenderingControl = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lock NoGroupLock = new();
     public SonosController()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
@@ -110,6 +118,44 @@ public sealed class SonosController : ISonosController
                "</s:Envelope>";
     }
 
+    public static string BuildGetGroupVolumeEnvelope()
+    {
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
+               " <s:Body>\r\n" +
+               $"  <u:GetGroupVolume xmlns:u=\"{SoapNsGroupRenderingControl}\">\r\n" +
+               "   <InstanceID>0</InstanceID>\r\n" +
+               "  </u:GetGroupVolume>\r\n" +
+               " </s:Body>\r\n" +
+               "</s:Envelope>";
+    }
+
+    public static string BuildSetGroupVolumeEnvelope(int volume)
+    {
+        var clamped = Math.Clamp(volume, 0, 100);
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
+               " <s:Body>\r\n" +
+               $"  <u:SetGroupVolume xmlns:u=\"{SoapNsGroupRenderingControl}\">\r\n" +
+               "   <InstanceID>0</InstanceID>\r\n" +
+               $"   <DesiredVolume>{clamped}</DesiredVolume>\r\n" +
+               "  </u:SetGroupVolume>\r\n" +
+               " </s:Body>\r\n" +
+               "</s:Envelope>";
+    }
+
+    public static string BuildSnapshotGroupVolumeEnvelope()
+    {
+        return "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n" +
+               "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\r\n" +
+               " <s:Body>\r\n" +
+               $"  <u:SnapshotGroupVolume xmlns:u=\"{SoapNsGroupRenderingControl}\">\r\n" +
+               "   <InstanceID>0</InstanceID>\r\n" +
+               "  </u:SnapshotGroupVolume>\r\n" +
+               " </s:Body>\r\n" +
+               "</s:Envelope>";
+    }
+
     public static string StripScheme(string url)
     {
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return url[7..];
@@ -147,8 +193,27 @@ public sealed class SonosController : ISonosController
         await CallAsync(device.AvTransportControlUrl, "Stop", BuildStopEnvelope(), ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reads the volume of the whole zone group, falling back to the single
+    /// player when the device has no GroupRenderingControl (issue #30).
+    /// </summary>
     public async Task<int> GetVolumeAsync(SonosDevice device, CancellationToken ct = default)
     {
+        if (SupportsGroupRendering(device))
+        {
+            try
+            {
+                var groupBody = await CallForBodyAsync(device.GroupRenderingControlUrl, "GetGroupVolume",
+                    BuildGetGroupVolumeEnvelope(), SoapNsGroupRenderingControl, ct).ConfigureAwait(false);
+                if (int.TryParse(ExtractElement(groupBody, "CurrentVolume"), out var groupVolume))
+                    return Math.Clamp(groupVolume, 0, 100);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                MarkNoGroupRendering(device, "GetGroupVolume", ex);
+            }
+        }
+
         var body = await CallForBodyAsync(device.RenderingControlUrl, "GetVolume", BuildGetVolumeEnvelope(), SoapNsRenderingControl, ct).ConfigureAwait(false);
         var value = ExtractElement(body, "CurrentVolume");
         if (!int.TryParse(value, out var volume))
@@ -156,9 +221,64 @@ public sealed class SonosController : ISonosController
         return Math.Clamp(volume, 0, 100);
     }
 
+    /// <summary>
+    /// Sets the volume across every room in the zone group.
+    ///
+    /// RenderingControl SetVolume is per-player by definition, so on a group it
+    /// only moved the coordinator and left the other rooms alone (issue #30).
+    /// GroupRenderingControl scales all members against the snapshot taken when
+    /// the group volume was last captured, preserving their relative levels.
+    /// </summary>
     public async Task SetVolumeAsync(SonosDevice device, int volume, CancellationToken ct = default)
     {
+        if (SupportsGroupRendering(device))
+        {
+            try
+            {
+                await CallForBodyAsync(device.GroupRenderingControlUrl, "SetGroupVolume",
+                    BuildSetGroupVolumeEnvelope(volume), SoapNsGroupRenderingControl, ct).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                MarkNoGroupRendering(device, "SetGroupVolume", ex);
+            }
+        }
+
         await CallForBodyAsync(device.RenderingControlUrl, "SetVolume", BuildSetVolumeEnvelope(volume), SoapNsRenderingControl, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Captures each group member's current level so subsequent SetGroupVolume
+    /// calls scale them proportionally. Best-effort: failures are logged and
+    /// ignored, since SetGroupVolume still works without a fresh snapshot.
+    /// </summary>
+    public async Task SnapshotGroupVolumeAsync(SonosDevice device, CancellationToken ct = default)
+    {
+        if (!SupportsGroupRendering(device)) return;
+        try
+        {
+            await CallForBodyAsync(device.GroupRenderingControlUrl, "SnapshotGroupVolume",
+                BuildSnapshotGroupVolumeEnvelope(), SoapNsGroupRenderingControl, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            MarkNoGroupRendering(device, "SnapshotGroupVolume", ex);
+        }
+    }
+
+    private static bool SupportsGroupRendering(SonosDevice device)
+    {
+        lock (NoGroupLock) return !NoGroupRenderingControl.Contains(device.Udn);
+    }
+
+    private static void MarkNoGroupRendering(SonosDevice device, string action, Exception ex)
+    {
+        bool added;
+        lock (NoGroupLock) added = NoGroupRenderingControl.Add(device.Udn);
+        if (added)
+            Log.Information("{Action} not available on {Name} ({Udn}); using per-player RenderingControl instead: {Message}",
+                action, device.FriendlyName, device.Udn, ex.Message);
     }
 
     private async Task CallAsync(string controlUrl, string action, string body, CancellationToken ct)

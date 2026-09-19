@@ -159,4 +159,50 @@ public class StreamServerTests
             server.Dispose();
         }
     }
+
+    [Fact]
+    public async Task DisconnectedClient_IsUnsubscribedFromBroadcast()
+    {
+        // A dead connection used to stay registered until its buffer filled,
+        // inflating the client count and eventually logging a bogus "slow
+        // subscriber" warning (issue #26).
+        var ct = TestContext.Current.CancellationToken;
+        var broadcast = new BroadcastChannel<ReadOnlyMemory<byte>>();
+        var server = new StreamServer(broadcast, 0, StreamingFormat.Aac256, IPAddress.Loopback);
+        server.Start();
+        try
+        {
+            using (var client = new TcpClient())
+            {
+                await client.ConnectAsync(IPAddress.Loopback, server.LocalEndPoint.Port, ct);
+                await using var stream = client.GetStream();
+                var request = Encoding.ASCII.GetBytes($"GET {server.StreamPath} HTTP/1.0\r\nHost: localhost\r\n\r\n");
+                await stream.WriteAsync(request, ct);
+
+                await WaitForSubscriberCountAsync(broadcast, 1, ct);
+                broadcast.SubscriberCount.Should().Be(1);
+            }
+
+            // Writes are what surface the broken socket to the serve loop.
+            var payload = new ReadOnlyMemory<byte>(new byte[4096]);
+            for (int i = 0; i < 200 && broadcast.SubscriberCount > 0; i++)
+            {
+                broadcast.Write(payload);
+                await Task.Delay(10, ct);
+            }
+
+            broadcast.SubscriberCount.Should().Be(0);
+            broadcast.DroppedSubscribers.Should().Be(0);
+        }
+        finally
+        {
+            server.Dispose();
+        }
+    }
+
+    private static async Task WaitForSubscriberCountAsync<T>(BroadcastChannel<T> broadcast, int expected, CancellationToken ct)
+    {
+        for (int i = 0; i < 200 && broadcast.SubscriberCount != expected; i++)
+            await Task.Delay(10, ct);
+    }
 }

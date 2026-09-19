@@ -195,6 +195,7 @@ public sealed class StreamServer : IStreamServer
             catch (ChannelClosedException) { }
             catch (IOException ex) { Log.Information("Client {Peer} IO ended: {Msg}", peer, ex.Message); }
             catch (SocketException ex) { Log.Information("Client {Peer} socket ended: {Msg}", peer, ex.Message); }
+            finally { _broadcast.Unsubscribe(subscription); }
             var elapsed = (DateTime.UtcNow - t0).TotalSeconds;
             Log.Information("Client {Peer} closed: {Frames} frames, {Bytes} bytes, {Elapsed:F1}s ({Kbps:F0} kbps), slowWrites={SlowWrites}, format={Format}",
                 peer, frames, bytes, elapsed, elapsed > 0 ? bytes * 8 / 1000 / elapsed : 0, slowWrites, _format);

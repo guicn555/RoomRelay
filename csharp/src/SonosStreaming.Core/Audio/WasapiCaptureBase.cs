@@ -22,6 +22,19 @@ public abstract class WasapiCaptureBase : IAudioSource
     [DllImport("Ole32.dll", ExactSpelling = true)]
     private static extern void CoUninitialize();
 
+    // MMCSS. A plain background thread competes with every other thread on the
+    // box, so under load it gets descheduled, leaves packets sitting in the
+    // WASAPI buffer, and then drains several periods in one oversized burst.
+    // Those bursts push the stream ahead of the wall clock and make the rate
+    // governor trim real audio. "Pro Audio" is the scheduling class Windows
+    // provides for exactly this.
+    [DllImport("Avrt.dll", CharSet = CharSet.Unicode, SetLastError = true, ExactSpelling = true)]
+    private static extern IntPtr AvSetMmThreadCharacteristicsW(string taskName, ref uint taskIndex);
+
+    [DllImport("Avrt.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AvRevertMmThreadCharacteristics(IntPtr handle);
+
     protected readonly Channel<PcmFrameF32> _channel;
     protected MixFormat? _mixFormat;
     private WinAudioClient? _audioClient;
@@ -32,11 +45,23 @@ public abstract class WasapiCaptureBase : IAudioSource
     protected int _channelCount;
     protected int _bytesPerSample;
     protected bool _inputIsFloat;
+    private readonly int _capacity;
+    private long _droppedBuffers;
+    private long _droppedSampleFrames;
 
-    protected WasapiCaptureBase()
+    // Capture queue depth. Eight buffers was roughly 80 ms at a typical 10 ms
+    // device period, so any pump hiccup discarded audio and silently shortened
+    // the stream (issue #26). Queue about a second instead.
+    public const int DefaultCapacity = 96;
+
+    protected WasapiCaptureBase(int capacity = DefaultCapacity)
     {
-        _channel = Channel.CreateBounded<PcmFrameF32>(new BoundedChannelOptions(8)
+        _capacity = Math.Max(2, capacity);
+        _channel = Channel.CreateBounded<PcmFrameF32>(new BoundedChannelOptions(_capacity)
         {
+            // Live audio: if the pump falls behind, the oldest buffer is the one
+            // worth losing, since keeping it would only add latency. Drops are
+            // counted so the rate governor and diagnostics can see them.
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,
             SingleWriter = false,
@@ -44,6 +69,25 @@ public abstract class WasapiCaptureBase : IAudioSource
     }
 
     public MixFormat MixFormat => _mixFormat ?? throw new InvalidOperationException("Capture not started");
+
+    /// <summary>Capture buffers discarded because the pump could not keep up.</summary>
+    public long DroppedBuffers => Interlocked.Read(ref _droppedBuffers);
+
+    /// <summary>Sample frames (per channel) lost to those discarded buffers.</summary>
+    public long DroppedSampleFrames => Interlocked.Read(ref _droppedSampleFrames);
+
+    // TryWrite always succeeds under DropOldest, so a drop can only be spotted
+    // by checking the queue depth first. This is a diagnostic counter, so the
+    // small race against the reader is acceptable.
+    protected void WriteFrame(PcmFrameF32 frame)
+    {
+        if (_channel.Reader.Count >= _capacity)
+        {
+            Interlocked.Increment(ref _droppedBuffers);
+            Interlocked.Add(ref _droppedSampleFrames, frame.FrameCount);
+        }
+        _channel.Writer.TryWrite(frame);
+    }
 
     // Derived class calls this after it has activated and initialized its
     // IAudioClient and determined the mix format.
@@ -75,6 +119,7 @@ public abstract class WasapiCaptureBase : IAudioSource
     private void CaptureLoop()
     {
         CoInitializeEx(IntPtr.Zero, COINIT_MULTITHREADED);
+        var mmcss = JoinProAudioClass();
         try
         {
             while (!_stopped)
@@ -101,14 +146,39 @@ public abstract class WasapiCaptureBase : IAudioSource
                             {
                                 ConvertToFloat(data, samples, framesRead);
                             }
-                            _channel.Writer.TryWrite(new PcmFrameF32(samples, _mixFormat!.SampleRate, (ushort)_channelCount));
+                            WriteFrame(new PcmFrameF32(samples, _mixFormat!.SampleRate, (ushort)_channelCount));
                         }
                         finally { _captureClient.ReleaseBuffer(framesRead); }
                     }
                 }
             }
         }
-        finally { CoUninitialize(); }
+        finally
+        {
+            if (mmcss != IntPtr.Zero) AvRevertMmThreadCharacteristics(mmcss);
+            CoUninitialize();
+        }
+    }
+
+    // Best effort: MMCSS can be unavailable (disabled by policy, or the task
+    // profile missing), and capture still works without it, just with more
+    // jitter under load.
+    private static IntPtr JoinProAudioClass()
+    {
+        try
+        {
+            uint taskIndex = 0;
+            var handle = AvSetMmThreadCharacteristicsW("Pro Audio", ref taskIndex);
+            if (handle == IntPtr.Zero)
+                Log.Debug("MMCSS Pro Audio unavailable (error {Err}); capture runs at normal priority",
+                    Marshal.GetLastWin32Error());
+            return handle;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug(ex, "Could not join the MMCSS Pro Audio class");
+            return IntPtr.Zero;
+        }
     }
 
     protected abstract unsafe void ConvertToFloat(byte* src, float[] dst, uint frames);

@@ -38,6 +38,14 @@ public sealed class PipelineRunner : IDisposable
     private DateTime _lastFrameLog;
     private int _clippingHold;
 
+    // Everything downstream of the resampler runs at Resampler.TargetRate, so
+    // the governor can hold the stream to the wall clock (issue #26).
+    private readonly OutputRateGovernor _governor = new(Resampler.TargetRate);
+    private long _captureDroppedAtStart;
+    private long _lastCaptureDroppedBuffers;
+    private long _lastCaptureDroppedSampleFrames;
+    private uint _lastCaptureRate;
+
     public GainStage GainStage => _gainStage;
     public BalanceStage BalanceStage => _balanceStage;
     public VolumeStage VolumeStage => _volumeStage;
@@ -55,6 +63,32 @@ public sealed class PipelineRunner : IDisposable
     public DateTime? FirstClientAtUtc { get; private set; }
     public long FramesEmitted => Interlocked.Read(ref _framesEmitted);
     public int SlowWriteCount => _streamServer?.SlowWriteCount ?? _lastSlowWriteCount;
+
+    /// <summary>Capture buffers the source discarded because the pump lagged.</summary>
+    public long CaptureDroppedBuffers => _audioSource?.DroppedBuffers ?? _lastCaptureDroppedBuffers;
+
+    /// <summary>Milliseconds of capture lost to those discarded buffers.</summary>
+    public double CaptureDroppedMs
+    {
+        get
+        {
+            long frames = (_audioSource?.DroppedSampleFrames ?? _lastCaptureDroppedSampleFrames) - _captureDroppedAtStart;
+            uint rate = CurrentMixFormat?.SampleRate ?? _lastCaptureRate;
+            return rate > 0 ? frames * 1000.0 / rate : 0;
+        }
+    }
+
+    /// <summary>Milliseconds of silence the governor inserted to hold the output to real time.</summary>
+    public double PaddedSilenceMs => _governor.PaddedMs;
+
+    /// <summary>Milliseconds of audio the governor skipped because output ran ahead of real time.</summary>
+    public double TrimmedMs => _governor.TrimmedMs;
+
+    /// <summary>
+    /// Current output debt in milliseconds: positive means the stream is behind
+    /// the wall clock (Sonos will starve), negative means it is ahead.
+    /// </summary>
+    public double CurrentClockSkewMs => _governor.SkewMs;
 
     /// <summary>
     /// Raised when the pump loop terminates with an unhandled exception.
@@ -142,6 +176,8 @@ public sealed class PipelineRunner : IDisposable
 
         _framesEmitted = 0;
         _lastSlowWriteCount = 0;
+        _governor.Reset();
+        _captureDroppedAtStart = 0;
         _pipelineStart = DateTime.UtcNow;
         StartedAtUtc = _pipelineStart;
         FirstChunkAtUtc = null;
@@ -214,6 +250,11 @@ public sealed class PipelineRunner : IDisposable
         var t0 = DateTime.UtcNow;
         _cts?.Cancel();
 
+        // Freeze the output clock before the capture source goes away, or the
+        // governor keeps counting wall-clock time against a disposed source and
+        // the session's final diagnostics report many seconds of phantom debt.
+        _governor.Stop();
+
         // Kick off the Sonos Stop SOAP in parallel with local teardown — it
         // can take seconds on a slow network and there's no reason the local
         // pipeline shutdown should wait for it.
@@ -230,6 +271,12 @@ public sealed class PipelineRunner : IDisposable
         // Stop the capture source first so the pump stops getting new frames,
         // then await the pump so the encoder/resampler aren't disposed while
         // still in use on the pump thread.
+        if (_audioSource != null)
+        {
+            _lastCaptureDroppedBuffers = _audioSource.DroppedBuffers;
+            _lastCaptureDroppedSampleFrames = _audioSource.DroppedSampleFrames;
+            _lastCaptureRate = CurrentMixFormat?.SampleRate ?? 0;
+        }
         _audioSource?.Dispose();
         _audioSource = null;
 
@@ -293,41 +340,71 @@ public sealed class PipelineRunner : IDisposable
                 _                      => new MfAacEncoder(256_000),
             };
 
+            // Anchor the output clock before the first buffer arrives, so a
+            // silent PC still gets a real-time stream of silence rather than an
+            // empty response body.
+            _governor.Start();
+            _captureDroppedAtStart = _audioSource?.DroppedSampleFrames ?? 0;
+
+            var stallTimeout = TimeSpan.FromMilliseconds(LatencyMode.StallTimeoutMs());
+            Log.Information("Pump stall timeout: {Ms} ms (capture buffer {BufferMs} ms)",
+                LatencyMode.StallTimeoutMs(), LatencyMode.CaptureBufferMs());
+
             int iter = 0;
             while (!ct.IsCancellationRequested)
             {
                 iter++;
                 PcmFrameF32? frame;
+                var captureStalled = false;
                 try
                 {
                     using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(100));
+                    timeoutCts.CancelAfter(stallTimeout);
                     frame = await _audioSource!.NextFrameAsync(timeoutCts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    var silenceSamples = (int)(mix.SampleRate / 10) * mix.Channels;
-                    frame = PcmFrameF32.Silent(silenceSamples / mix.Channels, mix.SampleRate, mix.Channels);
+                    // Capture has been idle long enough that nothing can still be
+                    // in flight, which normally just means nothing is playing on
+                    // the PC. Produce no frame: the rate governor fills the gap
+                    // with exactly as much silence as the wall clock calls for.
+                    // Fabricating a fixed 100 ms of silence per timeout instead
+                    // under-delivered by the timeout overshoot (issue #26).
+                    frame = null;
+                    captureStalled = true;
                 }
                 catch (OperationCanceledException) { break; }
 
-                if (frame == null) { Log.Warning("Pump got null frame at iter={Iter}, exiting", iter); break; }
-                if (iter <= 3)
-                    Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
+                if (frame == null && !captureStalled)
+                {
+                    Log.Warning("Pump got null frame at iter={Iter}, exiting", iter);
+                    break;
+                }
 
-                var samples = frame.Samples.AsSpan();
-                _spectrumAnalyzer.Process(samples, frame.Channels);
-                _gainStage.Apply(samples, frame.Channels);
-                _balanceStage.Apply(samples, frame.Channels);
-                _equalizer.Process(samples, frame.Channels);
-                _channelDelay.Process(samples, frame.Channels);
-                _volumeStage.Apply(samples);
-                UpdateClipping(samples);
-                _vuMeter.Process(samples, frame.Channels);
+                if (frame != null)
+                {
+                    if (iter <= 3)
+                        Log.Information("Pump iter {Iter}: frame {Samples} samples @ {Rate} Hz / {Ch} ch", iter, frame.Samples.Length, frame.SampleRate, frame.Channels);
 
-                var resamplerInput = frame.Channels != 2 ? PcmConvert.DownmixToStereo(frame) : frame;
-                var i16Frame = _resampler.Process(resamplerInput);
-                _encoder.Encode(i16Frame);
+                    var samples = frame.Samples.AsSpan();
+                    _spectrumAnalyzer.Process(samples, frame.Channels);
+                    _gainStage.Apply(samples, frame.Channels);
+                    _balanceStage.Apply(samples, frame.Channels);
+                    _equalizer.Process(samples, frame.Channels);
+                    _channelDelay.Process(samples, frame.Channels);
+                    _volumeStage.Apply(samples);
+                    UpdateClipping(samples);
+                    _vuMeter.Process(samples, frame.Channels);
+
+                    var resamplerInput = frame.Channels != 2 ? PcmConvert.DownmixToStereo(frame) : frame;
+                    var i16Frame = _resampler.Process(resamplerInput);
+                    EncodeGoverned(i16Frame);
+                }
+                else
+                {
+                    PadToWallClock();
+                }
+
                 var chunk = _encoder.FlushChunk();
                 if (!chunk.IsEmpty)
                 {
@@ -343,8 +420,11 @@ public sealed class PipelineRunner : IDisposable
                 var now = DateTime.UtcNow;
                 if ((now - _lastFrameLog).TotalSeconds >= 3)
                 {
-                    Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}, droppedSubscribers={Dropped}",
-                        _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds), _broadcast.SubscriberCount, _broadcast.DroppedSubscribers);
+                    Log.Information("Pipeline: emitted {Frames} encoded frames total ({Rate:F1}/s), subscribers={Subs}, droppedSubscribers={Dropped}, " +
+                        "captureDrops={CaptureDrops} ({CaptureDropMs:F0} ms), padded={PadMs:F0} ms, trimmed={TrimMs:F0} ms, clockSkew={SkewMs:F0} ms",
+                        _framesEmitted, _framesEmitted / Math.Max(1.0, (now - _pipelineStart).TotalSeconds),
+                        _broadcast.SubscriberCount, _broadcast.DroppedSubscribers,
+                        CaptureDroppedBuffers, CaptureDroppedMs, PaddedSilenceMs, TrimmedMs, CurrentClockSkewMs);
                     _lastFrameLog = now;
                 }
             }
@@ -383,6 +463,27 @@ public sealed class PipelineRunner : IDisposable
             ? selection.ProcessSelection.Name
             : "Whole system";
         return $"RoomRelay - {source} to {device.FriendlyName}";
+    }
+
+    /// <summary>Encodes one resampled frame, holding the output to real time.</summary>
+    private void EncodeGoverned(PcmFrameI16 i16Frame)
+    {
+        if (_governor.Accept(i16Frame.FrameCount))
+            _encoder!.Encode(i16Frame);
+
+        PadToWallClock();
+    }
+
+    /// <summary>Inserts silence when output has fallen behind the wall clock.</summary>
+    private void PadToWallClock()
+    {
+        if (_encoder == null) return;
+
+        int pad = _governor.PadFrames();
+        if (pad <= 0) return;
+
+        _encoder.Encode(new PcmFrameI16(
+            new short[pad * Resampler.TargetChannels], Resampler.TargetRate, Resampler.TargetChannels));
     }
 
     private void UpdateClipping(ReadOnlySpan<float> samples)
