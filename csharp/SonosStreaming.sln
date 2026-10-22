@@ -1,6 +1,7 @@
+
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 18
-VisualStudioVersion = 18.10.12224.181 stable
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35521.96
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SonosStreaming.Core", "src\SonosStreaming.Core\SonosStreaming.Core.csproj", "{A1B2C3D4-1111-2222-3333-444455556666}"
 EndProject
@@ -32,19 +33,11 @@ Global
 		{A1B2C3D4-1111-2222-3333-444455557777}.Release|ARM64.Build.0 = Release|ARM64
 		{A1B2C3D4-1111-2222-3333-444455557777}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-1111-2222-3333-444455557777}.Release|x64.Build.0 = Release|x64
-		{A1B2C3D4-1111-2222-3333-444455558888}.Debug|ARM64.ActiveCfg = Debug|ARM64
-		{A1B2C3D4-1111-2222-3333-444455558888}.Debug|ARM64.Build.0 = Debug|ARM64
+		{A1B2C3D4-1111-2222-3333-444455558888}.Debug|ARM64.ActiveCfg = Debug|x64
 		{A1B2C3D4-1111-2222-3333-444455558888}.Debug|x64.ActiveCfg = Debug|x64
 		{A1B2C3D4-1111-2222-3333-444455558888}.Debug|x64.Build.0 = Debug|x64
-		{A1B2C3D4-1111-2222-3333-444455558888}.Release|ARM64.ActiveCfg = Release|ARM64
-		{A1B2C3D4-1111-2222-3333-444455558888}.Release|ARM64.Build.0 = Release|ARM64
+		{A1B2C3D4-1111-2222-3333-444455558888}.Release|ARM64.ActiveCfg = Release|x64
 		{A1B2C3D4-1111-2222-3333-444455558888}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-1111-2222-3333-444455558888}.Release|x64.Build.0 = Release|x64
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {5F537424-4357-425E-B92C-0E826CC5407A}
 	EndGlobalSection
 EndGlobal

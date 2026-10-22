@@ -30,6 +30,7 @@ CsWin32-generated bindings.
 ```powershell
 dotnet build                                  # debug build (all 3 projects)
 dotnet build -c Release                       # release build
+dotnet build -c Release -p:Platform=ARM64     # native ARM64 build (skips Tests, see gotcha 45)
 dotnet run --project src/SonosStreaming.App   # launch the app
 dotnet test                                   # run unit + integration tests
 ```
@@ -52,7 +53,7 @@ prompt is expected on first run.
 ```
 csharp/
   SonosStreaming.sln
-  Directory.Build.props                  # shared: net10.0-win, x64, unsafe, C# preview
+  Directory.Build.props                  # shared: net10.0-win, x64 + ARM64, unsafe, C# preview
   src/
     SonosStreaming.Core/                  # .NET library — audio, network, state, pipeline
       NativeMethods.txt                   # CsWin32 bindings list (Core)
@@ -94,9 +95,10 @@ csharp/
         PipelineOptions.cs              # Config constants
     SonosStreaming.App/                  # WinUI 3 unpackaged desktop app
       NativeMethods.txt                  # CsWin32 bindings list (App)
+      app.manifest                      # PerMonitorV2 DPI awareness, asInvoker, Win10/11 compat
       Program.cs                        # Custom entry: Bootstrap + Application.Start
       App.xaml / App.xaml.cs            # DI container, Serilog, tray setup
-      MainWindow.xaml.cs                # Mica backdrop, HWND caching, ShowWindow P/Invoke
+      MainWindow.xaml.cs                # Mica backdrop, HWND caching, DPI-scaled window sizing
       Assets/sonos-streaming.ico
       Views/
         MainPage.xaml                   # Declarative UI: cards, sliders, ListView, transport
@@ -448,6 +450,31 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     contiguous and every one was offered. It now looks the value up in
     `_visibleFormats`, so retiring a format cannot silently shift what
     the other entries select.
+
+44. **PerMonitorV2 makes window sizes physical pixels.** `app.manifest`
+    declares `PerMonitorV2` DPI awareness; without it Windows
+    bitmap-stretches the window and it is blurry on scaled displays. It
+    has to come from the manifest so it applies before any window or
+    native DLL is created. A custom manifest replaces the SDK's default
+    one, so it restates `requestedExecutionLevel level="asInvoker"`.
+    `AppWindow.Resize` and the `WM_GETMINMAXINFO` hook both take
+    physical pixels, so `MainWindow` keeps its sizes in effective
+    (96 DPI) pixels and scales them by `GetDpiForWindow / 96`. The hook
+    reads the DPI on every message because it changes when the window
+    moves to a monitor with a different scale factor.
+
+45. **ARM64 solution configurations.** `Directory.Build.props` lists
+    `x64;ARM64` and the solution has `Debug|ARM64` / `Release|ARM64`.
+    The test project maps to x64 with no `Build.0` under the ARM64
+    configurations, so Test Explorer on an x64 machine doesn't try to
+    start an ARM64 test host. On ARM64 hardware, run the tests natively
+    with `dotnet test tests/SonosStreaming.Tests -p:Platform=ARM64`.
+    Keep x64 as the **first** `SolutionConfigurationPlatforms` entry:
+    MSBuild builds the first entry when no `-p:Platform` is given, and
+    CI's `dotnet build` / `dotnet test` rely on that to get x64. If
+    ARM64 ends up first (it sorts ahead of x64), CI builds ARM64 and,
+    because the test project is skipped there, `dotnet test` exits 0
+    without running a single test.
 
 ## Testing pattern
 
