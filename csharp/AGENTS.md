@@ -469,12 +469,15 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     configurations, so Test Explorer on an x64 machine doesn't try to
     start an ARM64 test host. On ARM64 hardware, run the tests natively
     with `dotnet test tests/SonosStreaming.Tests -p:Platform=ARM64`.
-    Keep x64 as the **first** `SolutionConfigurationPlatforms` entry:
-    MSBuild builds the first entry when no `-p:Platform` is given, and
-    CI's `dotnet build` / `dotnet test` rely on that to get x64. If
-    ARM64 ends up first (it sorts ahead of x64), CI builds ARM64 and,
-    because the test project is skipped there, `dotnet test` exits 0
-    without running a single test.
+    Without `-p:Platform`, MSBuild uses the first
+    `SolutionConfigurationPlatforms` entry. The workflows pass
+    `-p:Platform=x64` to restore, build and test, so CI doesn't depend
+    on that order; any new workflow step that builds the solution
+    should pass it too. Keeping x64 first is still worthwhile for a bare
+    local `dotnet build` / `dotnet test`: if ARM64 ends up first (it
+    sorts ahead of x64), those build ARM64, and because the test project
+    is skipped there, `dotnet test` exits 0 without running a single
+    test.
 
 ## Testing pattern
 
