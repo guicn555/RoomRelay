@@ -188,7 +188,7 @@ jobs:
         run: choco install innosetup -y --no-progress
 
       - name: Restore
-        run: dotnet restore SonosStreaming.sln
+        run: dotnet restore SonosStreaming.sln -p:Platform=x64
 
       - name: Build
         run: |
@@ -200,10 +200,10 @@ jobs:
             "/p:InformationalVersion=$version"
           )
 
-          dotnet build SonosStreaming.sln -c Release --no-restore -warnaserror @versionProps
+          dotnet build SonosStreaming.sln -c Release -p:Platform=x64 --no-restore -warnaserror @versionProps
 
       - name: Test
-        run: dotnet test SonosStreaming.sln -c Release --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+        run: dotnet test SonosStreaming.sln -c Release -p:Platform=x64 --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
 
       - name: Publish app variants
         run: |

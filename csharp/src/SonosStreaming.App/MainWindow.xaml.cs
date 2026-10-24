@@ -17,6 +17,10 @@ namespace SonosStreaming.App;
 
 public sealed partial class MainWindow : Window
 {
+    // Effective (96 DPI) pixels. The process is PerMonitorV2 (app.manifest), so
+    // these go through ScaleForDpi before reaching Win32, which wants physical pixels.
+    private const int InitialWindowWidth = 855;
+    private const int InitialWindowHeight = 720;
     private const int MinWindowWidth = 816;
     private const int MinWindowHeight = 700;
     private const uint WM_GETMINMAXINFO = 0x0024;
@@ -40,7 +44,10 @@ public sealed partial class MainWindow : Window
         var appWindow = GetAppWindow();
         if (appWindow != null)
         {
-            appWindow.Resize(new Windows.Graphics.SizeInt32(855, 720));
+            var dpi = PInvoke.GetDpiForWindow(new Windows.Win32.Foundation.HWND(Hwnd));
+            appWindow.Resize(new Windows.Graphics.SizeInt32(
+                ScaleForDpi(InitialWindowWidth, dpi),
+                ScaleForDpi(InitialWindowHeight, dpi)));
             var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "sonos-streaming.ico");
             if (System.IO.File.Exists(iconPath))
             {
@@ -263,15 +270,22 @@ public sealed partial class MainWindow : Window
     {
         if (msg == WM_GETMINMAXINFO)
         {
+            // Read the DPI per message: it changes when the window moves to a
+            // monitor with a different scale factor.
+            var dpi = PInvoke.GetDpiForWindow(new Windows.Win32.Foundation.HWND(hwnd));
             var info = Marshal.PtrToStructure<MINMAXINFO>(lParam);
-            info.ptMinTrackSize.X = MinWindowWidth;
-            info.ptMinTrackSize.Y = MinWindowHeight;
+            info.ptMinTrackSize.X = ScaleForDpi(MinWindowWidth, dpi);
+            info.ptMinTrackSize.Y = ScaleForDpi(MinWindowHeight, dpi);
             Marshal.StructureToPtr(info, lParam, false);
             return IntPtr.Zero;
         }
 
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
+
+    // GetDpiForWindow returns 0 for an invalid handle; fall back to 100% then.
+    private static int ScaleForDpi(int value, uint dpi) =>
+        dpi == 0 ? value : (int)Math.Round(value * dpi / 96.0);
 
     [DllImport("comctl32.dll", SetLastError = true)]
     private static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, UIntPtr uIdSubclass, UIntPtr dwRefData);

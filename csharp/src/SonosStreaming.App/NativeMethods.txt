@@ -12,6 +12,7 @@ PROCESS_LOOPBACK_MODE
 VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
 ShowWindow
 SetForegroundWindow
+GetDpiForWindow
 SHOW_WINDOW_CMD
 CoInitializeEx
 CoCreateInstance

@@ -340,7 +340,7 @@ the network profile where your Sonos lives so it can fetch the stream.
 ```
 csharp/
   SonosStreaming.sln
-  Directory.Build.props        # net10.0-windows, x64, unsafe, C# preview
+  Directory.Build.props        # net10.0-windows, x64 + ARM64, unsafe, C# preview
   src/
     SonosStreaming.Core/        # audio, network, DSP, pipeline
       Audio/                    # WASAPI capture, MF encoder, resampler, DSP

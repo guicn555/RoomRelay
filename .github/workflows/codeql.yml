@@ -41,10 +41,10 @@ jobs:
           build-mode: manual
 
       - name: Restore
-        run: dotnet restore SonosStreaming.sln
+        run: dotnet restore SonosStreaming.sln -p:Platform=x64
 
       - name: Build
-        run: dotnet build SonosStreaming.sln -c Release --no-restore
+        run: dotnet build SonosStreaming.sln -c Release -p:Platform=x64 --no-restore
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
