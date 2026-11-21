@@ -166,6 +166,9 @@ Install RoomRelay from the installer, or extract the ZIP and run
 - **AAC** is the safest Sonos path and remains the default. Sonos treats it as
   an internet radio stream, which is reliable but adds around a second of
   pre-buffering.
+- On **Windows 10**, the built-in Windows AAC encoder stops at 192 kbps. If you
+  pick AAC 256 or 320 kbps there, RoomRelay streams at the highest rate Windows
+  accepts and shows a notice; pick AAC 192 kbps to make that the setting.
 - **WAV PCM** is lossless 48 kHz stereo in a streaming WAV container, served as
   `audio/wav`. It uses about 1.5 Mbps and gives noticeably lower latency than
   AAC, because Sonos does not apply radio-style pre-buffering to it.

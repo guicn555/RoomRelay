@@ -48,14 +48,27 @@ public sealed partial class App : Application
         this.UnhandledException += (_, e) =>
         {
             e.Handled = true;
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "RoomRelay", "crash.txt");
-            try { File.WriteAllText(path, $"[{DateTime.Now}] UnhandledException\n{e.Exception}\n"); } catch { }
-            Log.Fatal(e.Exception, "Unhandled WinUI exception");
-            Log.CloseAndFlush();
+            RecordCrash("UnhandledException", "Unhandled WinUI exception", e.Exception);
         };
 
+        // Application.UnhandledException only sees exceptions on the UI thread.
+        // One thrown on a thread-pool thread (for example from an async void
+        // handler that touched the UI off-thread) ends the process, and without
+        // this the log simply stops (issue #35).
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            RecordCrash("Unhandled background exception", "Unhandled background exception; RoomRelay is exiting",
+                e.ExceptionObject as Exception);
+
         this.InitializeComponent();
+    }
+
+    private static void RecordCrash(string kind, string logMessage, Exception? exception)
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "RoomRelay", "crash.txt");
+        try { File.WriteAllText(path, $"[{DateTime.Now}] {kind}\n{exception}\n"); } catch { }
+        Log.Fatal(exception, logMessage);
+        Log.CloseAndFlush();
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)

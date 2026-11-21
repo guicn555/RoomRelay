@@ -18,7 +18,15 @@ public sealed unsafe class MfAacEncoder : IAudioEncoder
     private const int TargetBitsPerSample = 16;
     private const int AacFrameSize = 1024;     // samples per channel
 
-    private readonly int _targetBitRate;
+    /// <summary>The bitrate the caller asked for, in bits per second.</summary>
+    public int RequestedBitRate { get; }
+
+    /// <summary>
+    /// The bitrate the MFT accepted. Lower than <see cref="RequestedBitRate"/>
+    /// when this Windows build does not support the requested rate (Windows 10
+    /// stops at 192 kbps); see <see cref="AacBitrateFallback"/>.
+    /// </summary>
+    public int BitRate { get; private set; }
 
     private const uint MF_VERSION = 0x00020070;
     private const uint MFSTARTUP_FULL = 0;
@@ -48,38 +56,41 @@ public sealed unsafe class MfAacEncoder : IAudioEncoder
 
     public MfAacEncoder(int targetBitRate = 256_000)
     {
-        _targetBitRate = targetBitRate;
-        var hr = PInvoke.MFStartup(MF_VERSION, MFSTARTUP_FULL);
-        if (hr.Failed) throw Marshal.GetExceptionForHR(hr.Value)!;
-        _mfStarted = true;
+        RequestedBitRate = targetBitRate;
+        try
+        {
+            var hr = PInvoke.MFStartup(MF_VERSION, MFSTARTUP_FULL);
+            if (hr.Failed) throw Marshal.GetExceptionForHR(hr.Value)!;
+            _mfStarted = true;
 
-        const uint CLSCTX_INPROC_SERVER = 0x1;
-        var iidIMFTransform = typeof(IMFTransform).GUID;
-        int ccHr = CoCreateInstance(CLSID_CMSAACEncMFT, IntPtr.Zero, CLSCTX_INPROC_SERVER, iidIMFTransform, out var pTransform);
-        if (ccHr < 0) throw Marshal.GetExceptionForHR(ccHr)!;
-        _transform = (IMFTransform)Marshal.GetObjectForIUnknown(pTransform);
-        Marshal.Release(pTransform);
+            const uint CLSCTX_INPROC_SERVER = 0x1;
+            var iidIMFTransform = typeof(IMFTransform).GUID;
+            int ccHr = CoCreateInstance(CLSID_CMSAACEncMFT, IntPtr.Zero, CLSCTX_INPROC_SERVER, iidIMFTransform, out var pTransform);
+            if (ccHr < 0) throw Marshal.GetExceptionForHR(ccHr)!;
+            _transform = (IMFTransform)Marshal.GetObjectForIUnknown(pTransform);
+            Marshal.Release(pTransform);
 
-        ConfigureTypes();
-        _transform.ProcessMessage((MFT_MESSAGE_TYPE)MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+            ConfigureTypes();
+            _transform.ProcessMessage((MFT_MESSAGE_TYPE)MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+        }
+        catch
+        {
+            // Nobody gets a reference to a half-built encoder, so release the
+            // MFT and the MFStartup reference here, on the creating thread.
+            Dispose();
+            throw;
+        }
 
-        Log.Information("MF AAC encoder ready: {Rate} Hz, {Ch} ch, {Bitrate} bps",
-            TargetSampleRate, TargetChannels, _targetBitRate);
+        Log.Information("MF AAC encoder ready: {Rate} Hz, {Ch} ch, {Bitrate} bps (requested {Requested} bps)",
+            TargetSampleRate, TargetChannels, BitRate, RequestedBitRate);
     }
 
     private void ConfigureTypes()
     {
-        // Output type (AAC) must be set before input (PCM) on this MFT.
-        PInvoke.MFCreateMediaType(out var outType).ThrowOnFailure();
-        outType.SetGUID(MfAttr.MF_MT_MAJOR_TYPE, MfAttr.MFMediaType_Audio);
-        outType.SetGUID(MfAttr.MF_MT_SUBTYPE, MfAttr.MFAudioFormat_AAC);
-        outType.SetUINT32(MfAttr.MF_MT_AUDIO_BITS_PER_SAMPLE, TargetBitsPerSample);
-        outType.SetUINT32(MfAttr.MF_MT_AUDIO_SAMPLES_PER_SECOND, TargetSampleRate);
-        outType.SetUINT32(MfAttr.MF_MT_AUDIO_NUM_CHANNELS, TargetChannels);
-        outType.SetUINT32(MfAttr.MF_MT_AUDIO_AVG_BYTES_PER_SECOND, (uint)(_targetBitRate / 8));
-        outType.SetUINT32(MfAttr.MF_MT_AUDIO_BLOCK_ALIGNMENT, 1);
-        outType.SetUINT32(MfAttr.MF_MT_AAC_PAYLOAD_TYPE, 1); // 1 = ADTS framing
-        _transform!.SetOutputType(0, outType, 0);
+        // Output type (AAC) must be set before input (PCM) on this MFT. The
+        // accepted bitrates depend on the Windows build, so step down from the
+        // requested one until the MFT takes it (issue #35).
+        BitRate = AacBitrateFallback.Negotiate(RequestedBitRate, SetOutputType);
 
         PInvoke.MFCreateMediaType(out var inType).ThrowOnFailure();
         inType.SetGUID(MfAttr.MF_MT_MAJOR_TYPE, MfAttr.MFMediaType_Audio);
@@ -89,7 +100,21 @@ public sealed unsafe class MfAacEncoder : IAudioEncoder
         inType.SetUINT32(MfAttr.MF_MT_AUDIO_NUM_CHANNELS, TargetChannels);
         inType.SetUINT32(MfAttr.MF_MT_AUDIO_BLOCK_ALIGNMENT, (uint)(TargetChannels * TargetBitsPerSample / 8));
         inType.SetUINT32(MfAttr.MF_MT_AUDIO_AVG_BYTES_PER_SECOND, (uint)(TargetSampleRate * TargetChannels * TargetBitsPerSample / 8));
-        _transform.SetInputType(0, inType, 0);
+        _transform!.SetInputType(0, inType, 0);
+    }
+
+    private void SetOutputType(int bitRate)
+    {
+        PInvoke.MFCreateMediaType(out var outType).ThrowOnFailure();
+        outType.SetGUID(MfAttr.MF_MT_MAJOR_TYPE, MfAttr.MFMediaType_Audio);
+        outType.SetGUID(MfAttr.MF_MT_SUBTYPE, MfAttr.MFAudioFormat_AAC);
+        outType.SetUINT32(MfAttr.MF_MT_AUDIO_BITS_PER_SAMPLE, TargetBitsPerSample);
+        outType.SetUINT32(MfAttr.MF_MT_AUDIO_SAMPLES_PER_SECOND, TargetSampleRate);
+        outType.SetUINT32(MfAttr.MF_MT_AUDIO_NUM_CHANNELS, TargetChannels);
+        outType.SetUINT32(MfAttr.MF_MT_AUDIO_AVG_BYTES_PER_SECOND, (uint)(bitRate / 8));
+        outType.SetUINT32(MfAttr.MF_MT_AUDIO_BLOCK_ALIGNMENT, 1);
+        outType.SetUINT32(MfAttr.MF_MT_AAC_PAYLOAD_TYPE, 1); // 1 = ADTS framing
+        _transform!.SetOutputType(0, outType, 0);
     }
 
     /// <summary>

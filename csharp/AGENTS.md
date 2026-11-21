@@ -10,9 +10,10 @@ Windows-only .NET 10 / WinUI 3 desktop app that:
 - Resamples / converts to 48 kHz s16 stereo (pure C# pass-through when the
   device is already at 48 kHz, otherwise the Windows Media Foundation
   resampler MFT).
-- Encodes to AAC-LC @ 256 kbps using the Windows Media Foundation AAC encoder
-  MFT, configured with `MF_MT_AAC_PAYLOAD_TYPE = 1` so output is already
-  ADTS-framed.
+- Encodes to AAC-LC (256 kbps by default, stepping down where Windows does
+  not support the rate, see gotcha 47) using the Windows Media Foundation AAC
+  encoder MFT, configured with `MF_MT_AAC_PAYLOAD_TYPE = 1` so output is
+  already ADTS-framed.
 - Serves the ADTS stream on `http://<host>:8000/stream.aac` from a raw
   `TcpListener` HTTP/1.0 server.
 - Discovers Sonos speakers via SSDP (concurrent per-NIC, IPv4 + IPv6), pulls
@@ -66,6 +67,8 @@ csharp/
         SyntheticSource.cs              # Sine / silence / noise test source
         Resampler.cs                    # Pass-through @ 48 kHz, MF resampler MFT otherwise
         MfAacEncoder.cs                 # Media Foundation AAC encoder MFT (CLSID_CMSAACEncMFT)
+        AacBitrateFallback.cs           # Steps down to a bitrate this Windows build's MFT accepts
+        MediaFoundationAvailability.cs  # Recognises "no Media Foundation" (N/KN editions, Server)
         AdtsFrameScanner.cs             # ADTS header parse + scan utility
         EndpointMuteGuard.cs            # IAudioEndpointVolume mute guard via CsWin32
         AudioEndpointMonitor.cs         # Polls default endpoint format; raises FormatChanged
@@ -313,9 +316,17 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     LPCM's higher bitrate.
 
 25. **Pipeline crash surfacing.** `PipelineRunner` raises a
-    `PumpCrashed` event when the pump loop hits an unhandled exception.
-    `MainViewModel` subscribes, transitions the state machine to Idle,
-    and shows an `InfoBar` with the exception message.
+    `PumpCrashed` event when the pump loop hits an unhandled exception
+    after it has started. `MainViewModel` handles it on the UI thread
+    (gotcha 48), transitions the state machine to Idle, and shows an
+    `InfoBar` with the exception message. A failure while the pump builds
+    its resampler and encoder is not a crash event: `StartAsync` waits for
+    the pump's ready signal before it mutes the endpoint or sends SOAP, and
+    rethrows the failure, so `MainViewModel.StartAsync` reports it like any
+    other start error and Sonos is never told to play a stream that will
+    not come. `StopAsync` only sends Sonos `Stop` if the session got as far
+    as sending `Play`, so a failed start leaves the room's own playback
+    alone.
 
 26. **Audio endpoint format monitor.** `AudioEndpointMonitor` polls
     `WasapiLoopbackSource.ProbeMixFormat()` every 5 seconds. If the
@@ -489,6 +500,35 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     passed as `--solution` / `--project` (not positionally), and TRX
     output comes from xunit's own reporter, `--report-xunit-trx
     --report-xunit-trx-filename <name>`, not `--logger trx`.
+
+47. **AAC bitrates depend on the Windows build.** The AAC encoder MFT
+    documentation lists 96, 128, 160 and 192 kbps for stereo, and
+    `GetOutputAvailableType` enumerates only those, even on Windows 11.
+    Windows 11 (checked on build 26300) also accepts 256 and 320 kbps when
+    `SetOutputType` asks for them directly (224 and 288 are rejected), and
+    really encodes at those rates. Windows 10 22H2 (build 19045) rejects
+    256 kbps with `MF_E_INVALIDMEDIATYPE` (0xC00D36B4), issue #35.
+    `MfAacEncoder` therefore asks for the requested rate and steps down
+    through `AacBitrateFallback.KnownBitRates` until the MFT accepts one;
+    retrying `SetOutputType` on the same MFT after a rejection works.
+    `PipelineRunner.EncoderBitRate` reports the rate in use and
+    `MainViewModel` shows a warning when it is below the picked format. Do
+    not switch to enumerating the advertised types: that would cap
+    Windows 11 at 192 kbps.
+
+48. **Pipeline events arrive off the UI thread.** `PumpCrashed` fires on
+    the pump thread and `FormatChanged` on the endpoint monitor's timer
+    thread. The x:Bind generated setters write straight to the control, so
+    setting a bound view-model property from there throws
+    `RPC_E_WRONG_THREAD`, and inside an `async void` handler on a
+    thread-pool thread that exception terminates the process without
+    reaching `Application.UnhandledException`. That is how an AAC encoder
+    error closed RoomRelay with nothing on screen and nothing in the log
+    (issue #35). `MainViewModel.RunOnUiThread` marshals these handlers onto
+    the `DispatcherQueue` and logs whatever they throw, and `App` hooks
+    `AppDomain.CurrentDomain.UnhandledException` so a background crash at
+    least reaches the log and `crash.txt`. Any new pipeline event needs the
+    same treatment.
 
 ## Testing pattern
 

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Net;
+using System.Runtime.ExceptionServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Dispatching;
@@ -215,6 +216,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ISsdpDiscovery _discovery;
     private readonly ITopologyResolver _topology;
     private DispatcherQueue? _dq;
+    private Exception? _pumpCrashDuringStart;
     private Task? _processPollTask;
     private CancellationTokenSource? _processPollCts;
     private CancellationTokenSource? _sonosVolumeDebounceCts;
@@ -226,6 +228,10 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _core = core;
         _diagnostics = diagnostics;
+        // Constructed on the UI thread (OnLaunched), so this is the queue that
+        // pipeline events are marshalled onto. StartAudioProcessPolling sets it
+        // again from the same thread.
+        _dq = DispatcherQueue.GetForCurrentThread();
         Pipeline = pipeline;
         Settings = settings;
         _discovery = discovery;
@@ -281,7 +287,10 @@ public sealed partial class MainViewModel : ObservableObject
         _allowSonosVolumeApply = true;
     }
 
-    private async void OnFormatChanged(object? sender, EventArgs e)
+    // Raised on the endpoint monitor's timer thread; see RunOnUiThread.
+    private void OnFormatChanged(object? sender, EventArgs e) => RunOnUiThread(HandleFormatChangedAsync);
+
+    private async Task HandleFormatChangedAsync()
     {
         Log.Warning("Audio endpoint format changed; stopping stream");
         var speaker = _core.Selection.Speaker;
@@ -307,6 +316,57 @@ public sealed partial class MainViewModel : ObservableObject
             _dq.TryEnqueue(() => ShowNotification("Speaker Not Connected", message, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning));
         else
             ShowNotification("Speaker Not Connected", message, Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning);
+    }
+
+    // Pipeline events arrive on background threads. The handlers set
+    // x:Bind-bound properties, whose generated setters throw RPC_E_WRONG_THREAD
+    // off the UI thread, and an exception escaping an async void handler on a
+    // thread-pool thread terminates the process without reaching
+    // Application.UnhandledException. That is how an AAC encoder error used to
+    // close RoomRelay with nothing on screen (issue #35).
+    private void RunOnUiThread(Func<Task> handler)
+    {
+        async void Run()
+        {
+            try { await handler(); }
+            catch (Exception ex) { Log.Error(ex, "Pipeline event handler failed"); }
+        }
+
+        var dq = _dq;
+        if (dq == null || dq.HasThreadAccess)
+            Run();
+        else if (!dq.TryEnqueue(Run))
+            Log.Warning("Could not queue a pipeline event onto the UI thread");
+    }
+
+    // Starts the pipeline, then rethrows a pump crash that arrived while
+    // StartAsync was still awaiting Sonos, so the caller's error path handles
+    // it instead of HandlePumpCrashAsync racing the start.
+    private async Task StartPipelineAsync(SonosDevice speaker)
+    {
+        _pumpCrashDuringStart = null;
+        await Pipeline.StartAsync(speaker, CancellationToken.None);
+        if (_pumpCrashDuringStart is { } crash)
+        {
+            _pumpCrashDuringStart = null;
+            ExceptionDispatchInfo.Throw(crash);
+        }
+    }
+
+    // The Windows AAC encoder's bitrates depend on the Windows build (Windows
+    // 10 tops out at 192 kbps), and MfAacEncoder steps down rather than fail.
+    private void ShowEncoderFallbackNotice()
+    {
+        var format = Pipeline.Format;
+        var actual = Pipeline.EncoderBitRate;
+        if (format.IsPcm() || actual <= 0 || actual >= format.Bitrate())
+            return;
+
+        ShowNotification(
+            "Lower AAC Bitrate",
+            $"This version of Windows cannot encode {format.DisplayName()}, so RoomRelay is streaming AAC at {actual / 1000} kbps. " +
+            $"Choose AAC {actual / 1000} kbps to stop seeing this message.",
+            Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning);
     }
 
     partial void OnIsClippingChanged(bool value)
@@ -490,8 +550,21 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    private async void OnPumpCrashed(object? sender, Exception ex)
+    // Raised on the pump thread; see RunOnUiThread.
+    private void OnPumpCrashed(object? sender, Exception ex) => RunOnUiThread(() => HandlePumpCrashAsync(ex));
+
+    private async Task HandlePumpCrashAsync(Exception ex)
     {
+        if (_core.State == AppState.Starting)
+        {
+            // StartPipelineAsync is still awaiting the pipeline and reports
+            // this itself; stopping here would tear the pipeline down under it.
+            _pumpCrashDuringStart = ex;
+            return;
+        }
+        if (_core.State != AppState.Streaming)
+            return; // Already stopping or stopped.
+
         Log.Error(ex, "Pipeline crashed; stopping");
         var speaker = _core.Selection.Speaker;
         try { await Pipeline.StopAsync(speaker); } catch { }
@@ -1045,12 +1118,13 @@ public sealed partial class MainViewModel : ObservableObject
         {
             IsErrorVisible = false;
             StateLabel = "Starting…";
-            await Pipeline.StartAsync(speaker, CancellationToken.None);
+            await StartPipelineAsync(speaker);
             _core.FinishStart();
             StateLabel = "Streaming";
             PlaybackTargetLabel = speaker.FriendlyName;
 
             UpdateInputFormatLabel();
+            ShowEncoderFallbackNotice();
         }
         catch (Exception ex)
         {
@@ -1140,7 +1214,7 @@ public sealed partial class MainViewModel : ObservableObject
             _core.BeginStart();
             StateLabel = "Starting…";
 
-            await Pipeline.StartAsync(speaker, CancellationToken.None);
+            await StartPipelineAsync(speaker);
             _core.FinishStart();
             StateLabel = "Streaming";
             PlaybackTargetLabel = speaker.FriendlyName;
