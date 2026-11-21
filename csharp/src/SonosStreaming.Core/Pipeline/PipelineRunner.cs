@@ -32,6 +32,7 @@ public sealed class PipelineRunner : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _pumpTask;
     private Task? _clientCountTask;
+    private bool _sonosInstructed;
     private long _framesEmitted;
     private int _lastSlowWriteCount;
     private DateTime _pipelineStart;
@@ -62,6 +63,14 @@ public sealed class PipelineRunner : IDisposable
     public DateTime? FirstChunkAtUtc { get; private set; }
     public DateTime? FirstClientAtUtc { get; private set; }
     public long FramesEmitted => Interlocked.Read(ref _framesEmitted);
+
+    /// <summary>
+    /// Bitrate the AAC encoder accepted for the current or last session, or 0
+    /// for PCM. Below <see cref="Format"/>'s bitrate when this Windows build
+    /// does not support the requested rate (issue #35).
+    /// </summary>
+    public int EncoderBitRate { get; private set; }
+
     public int SlowWriteCount => _streamServer?.SlowWriteCount ?? _lastSlowWriteCount;
 
     /// <summary>Capture buffers the source discarded because the pump lagged.</summary>
@@ -91,7 +100,9 @@ public sealed class PipelineRunner : IDisposable
     public double CurrentClockSkewMs => _governor.SkewMs;
 
     /// <summary>
-    /// Raised when the pump loop terminates with an unhandled exception.
+    /// Raised on the pump thread when the pump loop terminates with an
+    /// unhandled exception after it started. Failures while creating the
+    /// resampler or encoder are thrown from <see cref="StartAsync"/> instead.
     /// </summary>
     public event EventHandler<Exception>? PumpCrashed;
 
@@ -121,6 +132,7 @@ public sealed class PipelineRunner : IDisposable
 
     public async Task StartAsync(SonosDevice device, CancellationToken ct)
     {
+        _sonosInstructed = false;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var token = _cts.Token;
 
@@ -183,7 +195,17 @@ public sealed class PipelineRunner : IDisposable
         FirstChunkAtUtc = null;
         FirstClientAtUtc = null;
         _lastFrameLog = _pipelineStart;
-        _pumpTask = Task.Run(() => PumpLoopAsync(token), token);
+        EncoderBitRate = 0;
+        var pumpReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pumpTask = Task.Run(() => PumpLoopAsync(pumpReady, token), token);
+
+        // Wait until the pump has built its resampler and encoder before
+        // muting the PC or telling Sonos to play. They have to be created on
+        // the pump thread, but a failure there (Windows 10 rejects AAC 256
+        // kbps, N editions have no Media Foundation) must reach the caller as
+        // a start error, not as a crash event racing the rest of this method
+        // (issue #35).
+        await pumpReady.Task.WaitAsync(token).ConfigureAwait(false);
 
         _clientCountTask = Task.Run(async () =>
         {
@@ -242,6 +264,7 @@ public sealed class PipelineRunner : IDisposable
             device.FriendlyName, streamUrl, Format, Format.ContentType(), !Format.IsPcm());
 
         var sonos = new SonosController();
+        _sonosInstructed = true;
         await sonos.SetUriAndPlayAsync(device, streamUrl, ct, useRadioScheme: !Format.IsPcm(), contentType: Format.MetadataMimeType(), metadataTitle: BuildMetadataTitle(selection, device)).ConfigureAwait(false);
     }
 
@@ -257,9 +280,11 @@ public sealed class PipelineRunner : IDisposable
 
         // Kick off the Sonos Stop SOAP in parallel with local teardown — it
         // can take seconds on a slow network and there's no reason the local
-        // pipeline shutdown should wait for it.
+        // pipeline shutdown should wait for it. Only stop the speaker if this
+        // session told it to play: a start that failed earlier must not
+        // interrupt whatever the room was already playing.
         Task sonosStop = Task.CompletedTask;
-        if (device != null)
+        if (device != null && _sonosInstructed)
         {
             sonosStop = Task.Run(async () =>
             {
@@ -267,6 +292,7 @@ public sealed class PipelineRunner : IDisposable
                 catch (Exception ex) { Log.Warning(ex, "Failed to stop Sonos"); }
             });
         }
+        _sonosInstructed = false;
 
         // Stop the capture source first so the pump stops getting new frames,
         // then await the pump so the encoder/resampler aren't disposed while
@@ -319,7 +345,7 @@ public sealed class PipelineRunner : IDisposable
         Log.Information("Pipeline stopped in {Ms:F0} ms", (DateTime.UtcNow - t0).TotalMilliseconds);
     }
 
-    private async Task PumpLoopAsync(CancellationToken ct)
+    private async Task PumpLoopAsync(TaskCompletionSource ready, CancellationToken ct)
     {
         Log.Information("Pipeline pump loop starting");
         try
@@ -328,19 +354,29 @@ public sealed class PipelineRunner : IDisposable
             if (mix.Channels > 2)
                 Log.Information("Capture is {Ch}-channel; will downmix to stereo before encode", mix.Channels);
             ushort resamplerChannels = mix.Channels != 2 ? (ushort)2 : mix.Channels;
-            _resampler = new Resampler(mix.SampleRate, resamplerChannels);
-            _encoder = Format switch
+            try
             {
-                StreamingFormat.Aac128 => new MfAacEncoder(128_000),
-                StreamingFormat.Aac192 => new MfAacEncoder(192_000),
-                StreamingFormat.Aac256 => new MfAacEncoder(256_000),
-                StreamingFormat.Aac320 => new MfAacEncoder(320_000),
-                // L16Pcm is retired (issue #32) and normalized to WavPcm on
-                // load, but map it here too so a stale value can never reach
-                // the encoder switch and fall through to AAC.
-                StreamingFormat.WavPcm or StreamingFormat.L16Pcm => (IAudioEncoder)new LpcmEncoder(LatencyMode.PcmFlushBytes()),
-                _                      => new MfAacEncoder(256_000),
-            };
+                _resampler = new Resampler(mix.SampleRate, resamplerChannels);
+                _encoder = Format switch
+                {
+                    StreamingFormat.Aac128 => new MfAacEncoder(128_000),
+                    StreamingFormat.Aac192 => new MfAacEncoder(192_000),
+                    StreamingFormat.Aac256 => new MfAacEncoder(256_000),
+                    StreamingFormat.Aac320 => new MfAacEncoder(320_000),
+                    // L16Pcm is retired (issue #32) and normalized to WavPcm on
+                    // load, but map it here too so a stale value can never reach
+                    // the encoder switch and fall through to AAC.
+                    StreamingFormat.WavPcm or StreamingFormat.L16Pcm => (IAudioEncoder)new LpcmEncoder(LatencyMode.PcmFlushBytes()),
+                    _                      => new MfAacEncoder(256_000),
+                };
+            }
+            catch (Exception ex) when (MediaFoundationAvailability.IsMissing(ex))
+            {
+                throw new InvalidOperationException(MediaFoundationAvailability.MissingMessage, ex);
+            }
+
+            EncoderBitRate = _encoder is MfAacEncoder aac ? aac.BitRate : 0;
+            ready.TrySetResult();
 
             // Anchor the output clock before the first buffer arrives, so a
             // silent PC still gets a real-time stream of silence rather than an
@@ -445,11 +481,23 @@ public sealed class PipelineRunner : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Pipeline pump loop crashed after {Frames} frames", _framesEmitted);
-            PumpCrashed?.Invoke(this, ex);
+            if (ready.TrySetException(ex))
+            {
+                // StartAsync is still waiting for the encoder and throws this
+                // to its caller, which reports it on the UI thread.
+                Log.Error(ex, "Pipeline could not create the {Format} encoder", Format);
+            }
+            else
+            {
+                Log.Error(ex, "Pipeline pump loop crashed after {Frames} frames", _framesEmitted);
+                PumpCrashed?.Invoke(this, ex);
+            }
         }
         finally
         {
+            // Never leave StartAsync waiting if the loop exits before the
+            // encoder is ready (a no-op once it has been completed).
+            ready.TrySetCanceled();
             _encoder?.Dispose();
             _encoder = null;
             _resampler?.Dispose();

@@ -108,6 +108,7 @@ public sealed class DiagnosticsPackageService
         sb.AppendLine($"Source: {selection.Source}");
         sb.AppendLine($"Process: {selection.ProcessSelection?.Name ?? "n/a"} ({selection.ProcessSelection?.Pid.ToString() ?? "n/a"})");
         sb.AppendLine($"Format: {pipeline.Format}");
+        sb.AppendLine($"AAC encoder bitrate: {(pipeline.EncoderBitRate > 0 ? $"{pipeline.EncoderBitRate} bps" : "n/a")}");
         sb.AppendLine($"Latency mode: {pipeline.LatencyMode}");
         sb.AppendLine($"Capture buffer target: {pipeline.LatencyMode.CaptureBufferMs()} ms");
         sb.AppendLine($"PCM flush target: {pipeline.LatencyMode.PcmFlushBytes()} bytes");
