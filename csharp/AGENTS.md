@@ -212,12 +212,14 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
    iterations whenever capture races the silence-injection timer. Let
    cancellation throw up to the pump.
 
-9. **`IAudioClient.GetService` returns the RCW directly.** CsWin32's
-   generated overload signature is `GetService(Guid* riid, out object
-   ppv)`, not `out void* ppv`. Cast the `out object` straight to the
-   target interface (e.g. `(IAudioCaptureClient)captureObj`) instead of
-   round-tripping through `Marshal.GetObjectForIUnknown((IntPtr)x)` —
-   that cast is `InvalidCastException: object → IntPtr`.
+9. **`IAudioClient.GetService` returns a raw pointer.** Since CsWin32
+   0.3.371 the generated signature is `GetService(Guid* riid, out void*
+   ppv)` (the metadata has no `iid_is` on `ppv`), while
+   `IMMDevice.Activate` still yields `out object`. Wrap the pointer with
+   `Marshal.GetObjectForIUnknown((IntPtr)p)` and then `Marshal.Release`
+   it, since the RCW holds its own reference. Older CsWin32 (0.3.275)
+   emitted `out object` here, so check the generated signature after a
+   CsWin32 bump: `-p:EmitCompilerGeneratedFiles=true` dumps it.
 
 10. **`iface as IAudioClient` after `GetActivateResult` is unreliable.**
     The RCW that comes out of `IActivateAudioInterfaceAsyncOperation::
@@ -468,7 +470,7 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     The test project maps to x64 with no `Build.0` under the ARM64
     configurations, so Test Explorer on an x64 machine doesn't try to
     start an ARM64 test host. On ARM64 hardware, run the tests natively
-    with `dotnet test tests/SonosStreaming.Tests -p:Platform=ARM64`.
+    with `dotnet test --project tests/SonosStreaming.Tests -p:Platform=ARM64`.
     Without `-p:Platform`, MSBuild uses the first
     `SolutionConfigurationPlatforms` entry. The workflows pass
     `-p:Platform=x64` to restore, build and test, so CI doesn't depend
@@ -478,6 +480,15 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     sorts ahead of x64), those build ARM64, and because the test project
     is skipped there, `dotnet test` exits 0 without running a single
     test.
+
+46. **`dotnet test` runs on Microsoft.Testing.Platform.** xunit.v3 4.x
+    ships Microsoft.Testing.Platform 2.x, which refuses the VSTest
+    bridge on the .NET 10 SDK ("Testing with VSTest target is no longer
+    supported"). The repo-root `global.json` opts into the MTP runner;
+    don't remove it. In this mode a solution or project path must be
+    passed as `--solution` / `--project` (not positionally), and TRX
+    output comes from xunit's own reporter, `--report-xunit-trx
+    --report-xunit-trx-filename <name>`, not `--logger trx`.
 
 ## Testing pattern
 
@@ -509,15 +520,15 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
 
 | Package                                 | Version          |
 |-----------------------------------------|------------------|
-| Microsoft.WindowsAppSDK                 | 2.0.1            |
+| Microsoft.WindowsAppSDK                 | 2.6.5            |
 | CommunityToolkit.Mvvm                   | 8.4.2            |
 | H.NotifyIcon.WinUI                      | 2.4.1            |
 | Microsoft.Graphics.Win2D                | 1.4.0            |
 | MathNet.Numerics                        | 5.0.0            |
-| Serilog                                 | 4.3.1            |
+| Serilog                                 | 4.4.0            |
 | Serilog.Sinks.File                      | 7.0.0            |
-| Microsoft.Extensions.DependencyInjection | 10.0.7          |
-| Microsoft.Windows.CsWin32               | 0.3.275          |
+| Microsoft.Extensions.DependencyInjection | 11.0.0          |
+| Microsoft.Windows.CsWin32               | 0.3.371          |
 
 ## Coding conventions
 

@@ -16,7 +16,7 @@ public class LpcmEncoderTests
         var frame = MakeFrame(new short[480]);
         enc.Encode(frame);
 
-        enc.FlushChunk().Should().Be(ReadOnlyMemory<byte>.Empty);
+        enc.FlushChunk().Should().BeEmpty();
     }
 
     [Fact]
@@ -50,7 +50,7 @@ public class LpcmEncoderTests
         var frame = MakeFrame(new short[480]);
         enc.Encode(frame);
 
-        enc.FlushChunk().Should().Be(ReadOnlyMemory<byte>.Empty);
+        enc.FlushChunk().Should().BeEmpty();
         var drained = enc.Drain();
         drained.Length.Should().Be(480 * 2);
     }
@@ -93,7 +93,7 @@ public class LpcmEncoderTests
         var enc = new LpcmEncoder();
         enc.Encode(MakeFrame(new short[480]));
         enc.Dispose();
-        enc.Drain().Should().Be(ReadOnlyMemory<byte>.Empty);
+        enc.Drain().Should().BeEmpty();
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public class LpcmEncoderTests
 
         var first = enc.FlushChunk();
         first.Length.Should().BeGreaterThan(0);
-        enc.FlushChunk().Should().Be(ReadOnlyMemory<byte>.Empty);
+        enc.FlushChunk().Should().BeEmpty();
     }
 
     [Fact]
