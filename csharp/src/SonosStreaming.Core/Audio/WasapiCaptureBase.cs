@@ -103,8 +103,11 @@ public abstract class WasapiCaptureBase : IAudioSource
         _audioClient.SetEventHandle(new Windows.Win32.Foundation.HANDLE(_bufferEvent.SafeWaitHandle.DangerousGetHandle()));
 
         var captureGuid = new Guid("C8ADBD64-E71E-48a0-A4DE-185C395CD317"); // IID_IAudioCaptureClient
-        _audioClient.GetService(&captureGuid, out var captureObj);
-        _captureClient = (WinAudioCapture)captureObj;
+        // CsWin32 emits GetService's ppv as a raw void* (the metadata carries no
+        // iid_is annotation), so wrap it in an RCW and drop the raw reference.
+        _audioClient.GetService(&captureGuid, out var pCapture);
+        _captureClient = (WinAudioCapture)Marshal.GetObjectForIUnknown((IntPtr)pCapture);
+        Marshal.Release((IntPtr)pCapture);
 
         OnBeforeCaptureStart();
 

@@ -203,7 +203,7 @@ jobs:
           dotnet build SonosStreaming.sln -c Release -p:Platform=x64 --no-restore -warnaserror @versionProps
 
       - name: Test
-        run: dotnet test SonosStreaming.sln -c Release -p:Platform=x64 --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+        run: dotnet test --solution SonosStreaming.sln -c Release -p:Platform=x64 --no-build --report-xunit-trx --report-xunit-trx-filename tests.trx --results-directory TestResults
 
       - name: Publish app variants
         run: |
