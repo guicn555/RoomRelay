@@ -221,13 +221,34 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
    emitted `out object` here, so check the generated signature after a
    CsWin32 bump: `-p:EmitCompilerGeneratedFiles=true` dumps it.
 
-10. **`iface as IAudioClient` after `GetActivateResult` is unreliable.**
-    The RCW that comes out of `IActivateAudioInterfaceAsyncOperation::
-    GetActivateResult` sometimes QIs to `E_NOINTERFACE` for the standard
-    IAudioClient IID on the first vtable call. Bypass with explicit
-    `Marshal.GetIUnknownForObject` + `Marshal.QueryInterface` to get a
-    fresh interface pointer, then `Marshal.GetObjectForIUnknown` on
-    that.
+10. **The process-loopback `IAudioClient` is MTA-bound (issue #36).**
+    `ActivateAudioInterfaceAsync` completes on an MTA worker thread, and
+    the object it activates for `VAD\Process_Loopback` is neither agile
+    (no `IAgileObject`, no free-threaded marshaler) nor marshalable: no
+    proxy/stub is registered for `IAudioClient`, so
+    `CoMarshalInterThreadInterfaceInStream` and `RoGetAgileReference`
+    fail with `REGDB_E_IIDNOTREG`. Any call on its RCW from an STA, such
+    as the WinUI thread, throws `InvalidCastException` /
+    `E_NOINTERFACE`, which reads like the target app being unsupported.
+    In 1.4.0 every per-application capture failed this way at
+    `Initialize`, and `Shutdown` silently failed to `Stop`. So
+    `ProcessLoopbackSource.Start`, `Stop` and the RCW releases go through
+    `WasapiCaptureBase.RunInMta`, which hops to the thread pool when the
+    caller is STA (all MTA threads share one apartment, so any MTA
+    thread will do). The Global Interface Table and agile references
+    can't help, since both need a proxy/stub. The endpoint client from
+    `IMMDevice::Activate` aggregates the free-threaded marshaler, which
+    is why `WasapiLoopbackSource` works from the UI thread.
+
+    This gotcha used to say `iface as IAudioClient` after
+    `GetActivateResult` was unreliable; that was the same apartment
+    failure. Cast `iface` directly on the callback thread. Re-wrapping it
+    with `GetIUnknownForObject` / `QueryInterface` /
+    `GetObjectForIUnknown` returns the same RCW with its reference count
+    bumped, so `Dispose` left the client alive until a GC finalized it.
+    The capture client from `GetService` shares that COM identity and is
+    the same RCW too; the two `ReleaseComObject` calls in `Dispose`
+    balance the two mappings.
 
 11. **SSDP receive must be per-socket and concurrent.** `UdpClient.ReceiveAsync`
     ignores `Socket.ReceiveTimeout`. A sequential
@@ -367,11 +388,14 @@ WASAPI capture thread → PcmFrameF32 → DSP (gain → EQ → delay → volume 
     excluded; inactive sessions are included so users can
     pre-select before playback starts.
 
-33. **Process loopback COM errors are user-friendly.** Both the
-    `InvalidCastException` (E_NOINTERFACE on `IAudioClient`) during
-    activation and during `Initialize` are caught and rethrown as
+33. **Process loopback COM errors are user-friendly.** An activation
+    result without `IAudioClient` (E_NOINTERFACE) and an
+    `InvalidCastException` from `Initialize` are both rethrown as
     `InvalidOperationException` with guidance to switch to "Whole system"
     mode. The pipeline wraps the error again with the app name and PID.
+    Since the issue #36 fix, an `E_NOINTERFACE` from `Initialize` means a
+    call reached the client from an STA (gotcha 10), not that the app is
+    protected.
 
 34. **Spectrum analyzer runs before all DSP stages.** The visualizer
     reflects the input signal before gain, EQ, and volume are applied,
@@ -510,6 +534,13 @@ Unit tests use xUnit + FluentAssertions + FsCheck. The e2e test
   `ISsdpDiscovery`, `ITopologyResolver`, and `ISonosController`
   exist, we can add tests that inject timeouts, empty scan results,
   and SOAP 500 responses without spinning up real HTTP servers.
+
+- **Re-test per-application capture of browsers.** Gotcha 32 hides
+  browsers because they "fail loopback", but that conclusion predates
+  the issue #36 fix, when every per-application capture failed with
+  `E_NOINTERFACE`. Check Chromium and Firefox (whose audio runs in a
+  child process, so the include-tree mode matters) before relaxing the
+  filter.
 
 ### Low priority
 - **Serilog log path discoverability.** The log lives at

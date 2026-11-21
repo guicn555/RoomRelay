@@ -77,7 +77,13 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
         return true;
     }
 
-    public void Start()
+    // The activated client lives in the MTA (the completion callback runs on
+    // an MTA worker) and cannot be called from an STA, so activation,
+    // Initialize and BeginCapture all run on an MTA thread. PipelineRunner
+    // calls this from the UI thread. See RunInMta.
+    public void Start() => RunInMta(StartCore);
+
+    private void StartCore()
     {
         var client = ActivateSync();
 
@@ -143,35 +149,20 @@ public sealed unsafe class ProcessLoopbackSource : WasapiCaptureBase
                     resultHr = hr.Value;
                     if (iface == null) return;
 
-                    var pUnk = Marshal.GetIUnknownForObject(iface);
-                    try
+                    // A plain cast is enough here, on the MTA callback thread.
+                    // It holds the single RCW reference GetActivateResult
+                    // handed back, which Dispose releases. Re-wrapping the
+                    // pointer with Marshal.GetObjectForIUnknown would map a
+                    // second reference onto the same RCW and keep the client
+                    // alive after Dispose.
+                    result = iface as WinAudioClient;
+                    if (result == null)
                     {
-                        var iid = IID_IAudioClient;
-                        int qi = Marshal.QueryInterface(pUnk, in iid, out var pAudioClient);
-                        if (qi >= 0 && pAudioClient != IntPtr.Zero)
-                        {
-                            try
-                            {
-                                result = (WinAudioClient)Marshal.GetObjectForIUnknown(pAudioClient);
-                            }
-                            catch (InvalidCastException ice)
-                            {
-                                resultHr = unchecked((int)0x80004002); // E_NOINTERFACE
-                                Log.Warning(ice, "Process loopback cast to IAudioClient failed for pid={Pid}. " +
-                                    "The process ({Name}) may be a protected/system process. " +
-                                    "Try 'Whole system' mode instead.", _pid, _pid);
-                            }
-                            Marshal.Release(pAudioClient);
-                        }
-                        else if (qi < 0)
-                        {
-                            resultHr = qi;
-                            Log.Warning("Process loopback QueryInterface failed for pid={Pid}: 0x{Hr:X8}. " +
-                                "The process may not have an active audio session, or it may be protected/elevated. " +
-                                "Try 'Whole system' mode instead.", _pid, qi);
-                        }
+                        resultHr = unchecked((int)0x80004002); // E_NOINTERFACE
+                        Marshal.ReleaseComObject(iface);
+                        Log.Warning("Process loopback activation for pid={Pid} returned an object without IAudioClient. " +
+                            "Try 'Whole system' mode instead.", _pid);
                     }
-                    finally { Marshal.Release(pUnk); }
                 }
             }
             finally

@@ -199,7 +199,11 @@ public abstract class WasapiCaptureBase : IAudioSource
     {
         if (_stopped) return;
         _stopped = true;
-        try { _audioClient?.Stop(); } catch { }
+        RunInMta(() =>
+        {
+            try { _audioClient?.Stop(); }
+            catch (Exception ex) { Log.Debug(ex, "IAudioClient.Stop failed"); }
+        });
         _channel.Writer.TryComplete();
         _bufferEvent?.Set();
     }
@@ -209,10 +213,32 @@ public abstract class WasapiCaptureBase : IAudioSource
         Shutdown();
         try { _captureThread?.Join(500); } catch { }
         OnDispose();
-        if (_captureClient != null) { Marshal.ReleaseComObject(_captureClient); _captureClient = null; }
-        if (_audioClient != null) { Marshal.ReleaseComObject(_audioClient); _audioClient = null; }
+        RunInMta(() =>
+        {
+            if (_captureClient != null) { Marshal.ReleaseComObject(_captureClient); _captureClient = null; }
+            if (_audioClient != null) { Marshal.ReleaseComObject(_audioClient); _audioClient = null; }
+        });
         _bufferEvent?.Dispose();
         _bufferEvent = null;
+    }
+
+    // Runs COM work for the audio clients on an MTA thread. The process
+    // loopback IAudioClient lives in the MTA and is neither agile nor
+    // marshalable (it has no IAgileObject or free-threaded marshaler, and no
+    // proxy/stub is registered for IAudioClient), so the runtime cannot reach
+    // it from an STA such as the WinUI thread and every call there fails with
+    // E_NOINTERFACE (issue #36). All MTA threads share one apartment, so a hop
+    // to the thread pool is enough. The endpoint client that
+    // WasapiLoopbackSource uses aggregates the free-threaded marshaler and
+    // works from any apartment, so routing it through here is harmless.
+    protected static void RunInMta(Action action)
+    {
+        if (Thread.CurrentThread.GetApartmentState() == ApartmentState.MTA)
+        {
+            action();
+            return;
+        }
+        Task.Run(action).GetAwaiter().GetResult();
     }
 
     protected virtual void OnDispose() { }
